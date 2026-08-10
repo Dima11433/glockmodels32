@@ -1,0 +1,29 @@
+# Виртуальное окружение Python
+.venv/
+venv/
+env/
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.idea/
+.vscode/
+
+# База данных (на сервере создаётся своя)
+shop.db
+shop.db.bak
+
+# Секретные переменные
+.env
+
+# Тесты
+.pytest_cache/
+tests/
+
+# Временные файлы
+*.log
+__MACOSX/
