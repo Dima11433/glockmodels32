@@ -272,6 +272,21 @@ class Database:
         await self.conn.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id))
         await self.conn.commit()
 
+    async def get_user_stats(self, user_id: int) -> dict:
+        """Возвращает количество заказов, выполненных заказов и сумму потраченного (в центах)."""
+        cur = await self.conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price), 0) FROM purchases WHERE user_id = ?",
+            (user_id,)
+        )
+        row = await cur.fetchone()
+        count = row[0] if row else 0
+        spent_cents = row[1] if row else 0
+        return {
+            "total_orders": count,
+            "completed_orders": count,
+            "total_spent_cents": spent_cents
+        }
+
     # --- настройки ---
 
     async def get_setting(self, key: str) -> str | None:

@@ -351,25 +351,52 @@ async def product_reviews(cb: CallbackQuery, db: Database):
 async def profile(cb: CallbackQuery, db: Database, state: FSMContext):
     await state.clear()
     user = await db.get_or_create_user(cb.from_user.id, cb.from_user.username)
-    count = await db.count_purchases(cb.from_user.id)
+    stats = await db.get_user_stats(cb.from_user.id)
+    loyalty = texts.get_loyalty_info(stats["total_spent_cents"])
+
     try:
         currency = user['currency'] if user else 'USD'
     except Exception:
         currency = 'USD'
-    
-    # Получаем информацию о контейнерах
+
+    # Форматирование даты регистрации
+    reg_raw = user["created_at"] if user and "created_at" in dict(user) and user["created_at"] else "2025-10-30"
+    try:
+        reg_parts = reg_raw.split()[0].split('-')
+        reg_formatted = f"{reg_parts[2]}.{reg_parts[1]}.{reg_parts[0]}"
+    except Exception:
+        reg_formatted = "30.10.2025"
+
+    username_str = f"@{user['username']}" if user and user['username'] else f"id{cb.from_user.id}"
+
+    # Синхронизация контейнеров
     await db.sync_user_containers(cb.from_user.id)
     container_info = await db.get_container_info(cb.from_user.id)
-    
-    text = (f"👤 Профиль\n\n🆔 ID: {cb.from_user.id}\n"
-            f"💰 Баланс: {texts.fmt_balance(user['balance'], currency)}\n🛒 Покупок: {count}\n\n"
-            f"📦 Контейнеры: {container_info['available']} доступно | {container_info['total_received']} получено | {container_info['opened']} открыто")
-    
+
+    text = (
+        f"🌀 <b>Профиль</b>\n\n"
+        f"🔘 <b>Аккаунт</b>\n"
+        f"├ Никнейм: {username_str}\n"
+        f"├ ID: <code>{cb.from_user.id}</code>\n"
+        f"└ Регистрация: {reg_formatted}\n\n"
+        f"📉 <b>Статистика</b>\n"
+        f"├ Всего заказов: {stats['total_orders']}\n"
+        f"├ Выполнено: {stats['completed_orders']}\n"
+        f"└ Потрачено: {texts.fmt_rub_amount(loyalty['spent_rub'])}\n\n"
+        f"🪙 <b>Финансы</b>\n"
+        f"└ Баланс: {texts.fmt_balance(user['balance'], currency)}\n\n"
+        f"💲 <b>Личная скидка</b>\n"
+        f"├ Статус: {loyalty['name']}\n"
+        f"└ Скидка: {loyalty['percent']:.2f}%\n\n"
+        f"📦 Контейнеры: {container_info['available']} доступно | {container_info['opened']} открыто"
+    )
+
     buttons = [
-        [InlineKeyboardButton(text=f"💱 Валюта: {currency}", callback_data="profile:currency")],
+        [InlineKeyboardButton(text="💲 Личная скидка", callback_data="profile:discount")],
         [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="topup")],
+        [InlineKeyboardButton(text=f"💱 Валюта: {currency}", callback_data="profile:currency")],
     ]
-    
+
     if container_info['available'] > 0:
         buttons.append([InlineKeyboardButton(text=f"🔓 Открыть контейнер ({container_info['available']})", callback_data="containers:open")])
     

@@ -15,12 +15,57 @@ def fmt_balance(cents: int, currency: str = 'USD') -> str:
     if currency == 'USD':
         return f"${cents / 100:.2f}"
     elif currency == 'RUB':
-        # конвертируем центы USD -> копейки RUB: cents * EXCHANGE_RATE
         rub_cents = int(round(cents * EXCHANGE_RATE))
-        return f"₽{rub_cents / 100:.2f}"
+        return f"{rub_cents / 100:,.2f}".replace(",", " ") + " ₽"
     else:
-        # fallback
         return f"{cents / 100:.2f} ({currency})"
+
+
+def fmt_rub_amount(val_rub: float) -> str:
+    """Форматирование суммы в рублях с разделением тысяч пробелом (e.g. 5 884.59 ₽)."""
+    formatted = f"{val_rub:,.2f}".replace(",", " ")
+    return f"{formatted} ₽"
+
+
+def get_loyalty_info(spent_cents: int) -> dict:
+    """Вычисление статуса и уровня личной скидки по общей сумме покупок в центах."""
+    spent_rub = (spent_cents * EXCHANGE_RATE) / 100.0
+    if spent_rub >= 50000.0:
+        return {
+            "name": "💎 Платина",
+            "percent": 10.0,
+            "spent_rub": spent_rub,
+            "next_name": None,
+            "next_target_rub": 50000.0,
+            "needed_rub": 0.0,
+        }
+    elif spent_rub >= 25000.0:
+        return {
+            "name": "🥇 Золото",
+            "percent": 5.0,
+            "spent_rub": spent_rub,
+            "next_name": "Платина",
+            "next_target_rub": 50000.0,
+            "needed_rub": 50000.0 - spent_rub,
+        }
+    elif spent_rub >= 10000.0:
+        return {
+            "name": "🥈 Серебро",
+            "percent": 2.50,
+            "spent_rub": spent_rub,
+            "next_name": "Золото",
+            "next_target_rub": 25000.0,
+            "needed_rub": 25000.0 - spent_rub,
+        }
+    else:
+        return {
+            "name": "🥉 Бронза",
+            "percent": 0.0,
+            "spent_rub": spent_rub,
+            "next_name": "Серебро",
+            "next_target_rub": 10000.0,
+            "needed_rub": 10000.0 - spent_rub,
+        }
 
 
 BTN_SEARCH = "🔍 Поиск"
