@@ -1329,8 +1329,8 @@ async def adm_btn_edit_save(message: Message, db: Database, state: FSMContext):
         return
 
     new_text = message.text.strip()
-    if len(new_text) > 32:
-        await message.answer("❌ Текст кнопки слишком длинный (максимум 32 символа). Попробуйте ещё раз:")
+    if len(new_text) > 128:
+        await message.answer("❌ Текст кнопки слишком длинный (максимум 128 символов). Попробуйте ещё раз:")
         return
     if not new_text:
         await message.answer("❌ Текст не может быть пустым. Попробуйте ещё раз:")
