@@ -34,9 +34,97 @@ async def noop(cb: CallbackQuery):
     await cb.answer()
 
 
+@router.callback_query(F.data.in_({"check_subscription", "check_mirror_subscription"}))
+async def check_subscription(cb: CallbackQuery, db: Database, bot: Bot):
+    """Проверяет подписку когда пользователь нажал «Я подписался»"""
+    from middleware import MAIN_CHANNEL_USERNAME, MAIN_CHANNEL_LINK
+
+    # Определяем какой канал проверять
+    if cb.data == "check_mirror_subscription":
+        mirror = await db.get_mirror_by_token(bot.token)
+        ch_username = mirror["channel_username"] if mirror else None
+        ch_link = mirror["channel_link"] if mirror else None
+    else:
+        ch_username = MAIN_CHANNEL_USERNAME
+        ch_link = MAIN_CHANNEL_LINK
+
+    if not ch_username:
+        await cb.answer("✅ Доступ открыт!", show_alert=False)
+        # Показываем главное меню
+        markup = await keyboards.main_menu(db)
+        await send_menu(cb.message, db, texts.MENU, markup)
+        return
+
+    try:
+        member = await bot.get_chat_member(f"@{ch_username}", cb.from_user.id)
+        is_subscribed = member.status in ("member", "administrator", "creator")
+    except Exception:
+        is_subscribed = True  # При ошибке не блокируем
+
+    if is_subscribed:
+        await cb.answer("✅ Подписка подтверждена!", show_alert=False)
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        # Показываем главное меню
+        markup = await keyboards.main_menu(db)
+        await send_menu(cb.message, db, texts.MENU, markup)
+    else:
+        await cb.answer(
+            "❌ Вы ещё не подписались на канал!\nПодпишитесь и нажмите кнопку снова.",
+            show_alert=True
+        )
+
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject, db: Database, state: FSMContext, bot: Bot, config, mirror: dict | None = None):
     await state.clear()
+
+    # ─── Парсим реферера из аргументов ───
+    referrer_id = None
+    if command.args and command.args.startswith("ref_"):
+        try:
+            referrer_id = int(command.args[4:])
+        except ValueError:
+            referrer_id = None
+
+    # ─── Регистрируем пользователя ПЕРВЫМ (чтобы реферер всегда сохранился) ───
+    existing = await db.get_user(message.from_user.id)
+    await db.get_or_create_user(message.from_user.id, message.from_user.username, referrer_id)
+
+    # Если пользователь новый И пришёл по рефке — уведомляем админа
+    if not existing and referrer_id:
+        referrer = await db.get_user(referrer_id)
+        if referrer:
+            uid = message.from_user.id
+            uname = message.from_user.username
+            user_link = f"tg://user?id={uid}"
+            user_mention = f'<a href="{user_link}">@{uname}</a>' if uname else f'<a href="{user_link}">#{uid}</a>'
+
+            ref_link = f"tg://user?id={referrer_id}"
+            ref_uname = referrer["username"]
+            ref_mention = f'<a href="{ref_link}">@{ref_uname}</a>' if ref_uname else f'<a href="{ref_link}">#{referrer_id}</a>'
+
+            notify_text = (
+                f"🤝 <b>Новый реферал!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Пользователь: {user_mention}\n"
+                f"🆔 ID: <code>{uid}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🔗 Пришёл от: {ref_mention}\n"
+                f"🆔 ID реферера: <code>{referrer_id}</code>"
+            )
+            try:
+                if config and getattr(config, "admin_group_id", None):
+                    await bot.send_message(config.admin_group_id, notify_text, parse_mode="HTML")
+                admin_id = await db.get_setting("admin_id")
+                if admin_id:
+                    await bot.send_message(int(admin_id), notify_text, parse_mode="HTML")
+            except Exception:
+                pass
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Активация чека через аргумент /start chk_...
     if command.args and command.args.startswith("chk_"):
@@ -70,11 +158,7 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, stat
                     f"{p['description']}\n\n"
                     f"💵 Цена: <b>{_texts.fmt_usd(p['price'])}</b>"
                 )
-
-                # Загружаем фото из БД
                 photos = await db.list_product_photos(pid)
-                # send_product_photos(message, file_ids, caption, markup)
-                # — объединяет фото + caption + кнопки в одно сообщение
                 await send_product_photos(message, photos, caption, buy_markup)
                 return
             else:
@@ -82,13 +166,6 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, stat
                 return
     # ───────────────────────────────────────────
 
-    referrer_id = None
-    if command.args and command.args.startswith("ref_"):
-        try:
-            referrer_id = int(command.args[4:])
-        except ValueError:
-            referrer_id = None
-    await db.get_or_create_user(message.from_user.id, message.from_user.username, referrer_id)
 
     welcome_text = texts.WELCOME
     await message.answer(welcome_text, reply_markup=ReplyKeyboardRemove())
@@ -356,12 +433,27 @@ async def referral(cb: CallbackQuery, db: Database, bot: Bot, state: FSMContext)
     clients = await db.count_referral_clients(cb.from_user.id)
     earned = await db.total_referral_earned(cb.from_user.id)
     user = await db.get_or_create_user(cb.from_user.id, cb.from_user.username)
-    currency = user.get('currency', 'USD') if user else 'USD'
-    text = texts.REFERRAL.format(link=link, invited=invited,
-                                 percent=percent_for_clients(clients),
-                                 earned=texts.fmt_balance(earned, currency))
-    await send_tab(cb.message, db, "video:tab:referral", text, menu_only_kb(), banner_suffix="referral")
+    currency = dict(user).get('currency', 'USD') if user else 'USD'
+    text = texts.REFERRAL.format(
+        link=link,
+        invited=invited,
+        percent=percent_for_clients(clients),
+        earned=texts.fmt_balance(earned, currency)
+    )
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Поделиться ссылкой",
+                              url=f"https://t.me/share/url?url={link}&text=Присоединяйся%20к%20магазину!")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:more")],
+    ])
+    try:
+        await send_tab(cb.message, db, "video:tab:referral", text, markup, banner_suffix="referral")
+    except Exception:
+        try:
+            await cb.message.edit_text(text, reply_markup=markup)
+        except Exception:
+            await cb.message.answer(text, reply_markup=markup)
     await cb.answer()
+
 
 
 @router.callback_query(F.data == "menu:search")
@@ -613,7 +705,7 @@ async def profile_currency_set(cb: CallbackQuery, db: Database):
     await cb.answer(f"Валюта изменена на {newc}")
     user = await db.get_or_create_user(cb.from_user.id, cb.from_user.username)
     count = await db.count_purchases(cb.from_user.id)
-    currency = user.get('currency', 'USD') if user else 'USD'
+    currency = dict(user).get('currency', 'USD') if user else 'USD'
     text = (f"👤 Профиль\n\n🆔 ID: {cb.from_user.id}\n"
             f"💰 Баланс: {texts.fmt_balance(user['balance'], currency)}\n🛒 Покупок: {count}")
     markup = InlineKeyboardMarkup(inline_keyboard=[

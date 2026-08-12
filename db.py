@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS promocodes (
     reward_type TEXT NOT NULL CHECK (reward_type IN ('bonus', 'discount')),
     value INTEGER NOT NULL,
     max_uses INTEGER NOT NULL DEFAULT 1,
+    max_uses_per_user INTEGER NOT NULL DEFAULT 1,
     used_count INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -234,16 +235,28 @@ class Database:
     async def get_or_create_user(self, user_id: int, username: str | None, referrer_id: int | None = None):
         row = await self.get_user(user_id)
         if row:
+            needs_commit = False
+            # Обновляем username если изменился
             if username and row["username"] != username:
                 await self.conn.execute("UPDATE users SET username = ? WHERE id = ?", (username, user_id))
+                needs_commit = True
+            # ← ГЛАВНЫЙ ФИКС: если реферера нет, но он передан — сохраняем
+            # (middleware создаёт юзера без реферера, cmd_start передаёт его позже)
+            if referrer_id and not row["referrer_id"] and referrer_id != user_id:
+                ref_exists = await self.get_user(referrer_id)
+                if ref_exists:
+                    await self.conn.execute(
+                        "UPDATE users SET referrer_id = ? WHERE id = ?", (referrer_id, user_id)
+                    )
+                    needs_commit = True
+            if needs_commit:
                 await self.conn.commit()
-                row = await self.get_user(user_id)
-            return row
+            return await self.get_user(user_id)
         if referrer_id == user_id or (referrer_id is not None and await self.get_user(referrer_id) is None):
             referrer_id = None
-        # По умолчанию создаём пользователя с валютой USD
+        # INSERT OR IGNORE — защита от параллельных запросов одного пользователя
         await self.conn.execute(
-            "INSERT INTO users (id, username, referrer_id, currency) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO users (id, username, referrer_id, currency) VALUES (?, ?, ?, ?)",
             (user_id, username, referrer_id, 'USD'),
         )
         await self.conn.commit()
@@ -877,11 +890,12 @@ class Database:
 
     # --- Промокоды (Promocodes) ---
 
-    async def create_promocode(self, code: str, reward_type: str, value: int, max_uses: int = 1) -> bool:
+    async def create_promocode(self, code: str, reward_type: str, value: int,
+                               max_uses: int = 1, max_uses_per_user: int = 1) -> bool:
         try:
             await self.conn.execute(
-                "INSERT INTO promocodes (code, reward_type, value, max_uses) VALUES (?, ?, ?, ?)",
-                (code.upper(), reward_type, value, max_uses),
+                "INSERT INTO promocodes (code, reward_type, value, max_uses, max_uses_per_user) VALUES (?, ?, ?, ?, ?)",
+                (code.upper(), reward_type, value, max_uses, max_uses_per_user),
             )
             await self.conn.commit()
             return True
@@ -901,8 +915,15 @@ class Database:
                 await self.conn.execute("ROLLBACK")
                 return {"status": "limit_reached"}
 
-            cur = await self.conn.execute("SELECT * FROM promocode_activations WHERE promo_id = ? AND user_id = ?", (promo["id"], user_id))
-            if await cur.fetchone():
+            # Проверяем сколько раз этот пользователь уже активировал промо
+            cur = await self.conn.execute(
+                "SELECT COUNT(*) FROM promocode_activations WHERE promo_id = ? AND user_id = ?",
+                (promo["id"], user_id)
+            )
+            user_activations = (await cur.fetchone())[0]
+            max_per_user = promo["max_uses_per_user"] if "max_uses_per_user" in promo.keys() else 1
+
+            if user_activations >= max_per_user:
                 await self.conn.execute("ROLLBACK")
                 return {"status": "already_used"}
 
@@ -916,10 +937,19 @@ class Database:
                 await self.conn.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (promo["value"], user_id))
 
             await self.conn.commit()
+
+            # Получаем данные пользователя для уведомления
+            cur = await self.conn.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+            user_row = await cur.fetchone()
+            username = user_row["username"] if user_row and user_row["username"] else None
+
             return {
                 "status": "ok",
                 "reward_type": promo["reward_type"],
-                "value": promo["value"]
+                "value": promo["value"],
+                "code": code_clean,
+                "user_id": user_id,
+                "username": username,
             }
         except Exception:
             await self.conn.execute("ROLLBACK")

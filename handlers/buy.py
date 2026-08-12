@@ -48,7 +48,8 @@ async def deliver(bot: Bot, chat_id: int, name: str, content_type: str | None, c
 
 
 async def notify_admin_sale(bot: Bot, db: Database, user_id: int, name: str, price: int, method: str, config=None) -> None:
-    """Уведомление в админ-канал о покупке с полной информацией включая реферала."""
+    """Уведомление в админ-канал о покупке с реферальным вознаграждением."""
+    from payments import percent_for_clients
     user = await db.get_user(user_id)
     if not user:
         return
@@ -63,14 +64,36 @@ async def notify_admin_sale(bot: Bot, db: Database, user_id: int, name: str, pri
         "free": "🎁 Бесплатно",
     }.get(method, method)
 
-    # Проверяем реферала
+    # Проверяем реферала и начисляем процент
     referrer_line = ""
-    if user.get("referrer_id"):
+    if user["referrer_id"]:
         ref = await db.get_user(user["referrer_id"])
         if ref:
-            ref_link = f"tg://user?id={ref['id']}"
-            ref_mention = f'<a href="{ref_link}">@{ref["username"]}</a>' if ref["username"] else f'<a href="{ref_link}">#{ref["id"]}</a>'
-            referrer_line = f"\n🤝 Пришёл по рефке: {ref_mention}"
+            ref_id = user["referrer_id"]
+            ref_link = f"tg://user?id={ref_id}"
+            ref_uname = ref["username"]
+            ref_mention = f'<a href="{ref_link}">@{ref_uname}</a>' if ref_uname else f'<a href="{ref_link}">#{ref_id}</a>'
+
+            # Считаем процент по количеству клиентов реферера
+            clients = await db.count_referral_clients(ref_id)
+            percent = percent_for_clients(clients)
+
+            if percent > 0 and price > 0:
+                earn = int(price * percent / 100)
+                try:
+                    await db.add_referral_earning(ref_id, user_id, earn, percent, "purchase")
+                    earn_text = f"+{texts.fmt_usd(earn)} ({percent}%)"
+                except Exception:
+                    earn_text = f"{percent}%"
+            else:
+                earn_text = "0% (порог не достигнут)"
+
+            referrer_line = (
+                f"\n━━━━━━━━━━━━━━━━━━\n"
+                f"🤝 Реферер: {ref_mention}\n"
+                f"📊 Уровень: {percent}% | Клиентов: {clients}\n"
+                f"💸 Начислено рефереру: {earn_text}"
+            )
 
     text = (
         f"🛒 <b>Новая покупка!</b>\n"
@@ -84,16 +107,12 @@ async def notify_admin_sale(bot: Bot, db: Database, user_id: int, name: str, pri
         f"{referrer_line}"
     )
 
-    # Отправляем в группу логов (приоритет) и в личку админу
-    sent = False
     if config and getattr(config, "admin_group_id", None):
         try:
             await bot.send_message(config.admin_group_id, text, parse_mode="HTML")
-            sent = True
         except Exception:
             pass
 
-    # Также пробуем отправить в личку через сохранённый admin_id
     admin_id = await db.get_setting("admin_id")
     if admin_id:
         try:
@@ -173,7 +192,7 @@ async def buy(cb: CallbackQuery, db: Database, payments: Payments):
             note = ""
         else:
             note = f"\n\n{texts.PAYMENTS_DISABLED}"
-        currency = user.get('currency', 'USD') if user else 'USD'
+        currency = dict(user).get('currency', 'USD') if user else 'USD'
         await cb.message.answer(
             f"На балансе {texts.fmt_balance(user['balance'], currency)}, а товар стоит {price}.{note}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)

@@ -1,3 +1,4 @@
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InputMediaPhoto, FSInputFile, InputFile, Message
 from pathlib import Path
 
@@ -127,9 +128,15 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
             else:
                 await message.answer_photo(photo_path, caption=caption,
                                            reply_markup=markup, parse_mode=parse_mode)
+        except TelegramForbiddenError:
+            # Пользователь заблокировал бота — молча игнорируем
+            return
         except Exception as e:
             logger.error(f"send_product_photos: error sending single photo: {e}")
-            await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
+            try:
+                await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
+            except TelegramForbiddenError:
+                return
         return
     
     # Несколько фото - отправляем альбом

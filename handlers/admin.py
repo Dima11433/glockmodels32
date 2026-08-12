@@ -1193,11 +1193,14 @@ class PromoCreateState(StatesGroup):
 async def adm_create_promo_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(PromoCreateState.waiting_for_details)
     await cb.message.answer(
-        "🎫 **Создание Промокода**\n\n"
+        "🎫 <b>Создание Промокода</b>\n\n"
         "Отправьте данные в формате:\n"
-        "`КОД СУММА КОЛИЧЕСТВО`\n\n"
-        "Пример: `SUMMER2026 100 50` (код SUMMER2026 на 100 ₽, 50 активаций)",
-        parse_mode="Markdown"
+        "<code>КОД СУММА ВСЕГО_АКТИВАЦИЙ АКТИВАЦИЙ_НА_ПОЛЬЗОВАТЕЛЯ</code>\n\n"
+        "📌 Примеры:\n"
+        "• <code>SUMMER 100 50 1</code> — код на 100₽, 50 активаций, 1 на пользователя\n"
+        "• <code>VIP500 500 10 3</code> — код на 500₽, 10 активаций, 3 на пользователя\n\n"
+        "💡 Если не указать последний параметр — по умолчанию 1 активация на пользователя.",
+        parse_mode="HTML"
     )
     await cb.answer()
 
@@ -1206,16 +1209,32 @@ async def adm_create_promo_start(cb: CallbackQuery, state: FSMContext):
 async def adm_create_promo_process(message: Message, state: FSMContext, db: Database):
     parts = message.text.strip().split()
     if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
-        await message.answer("❌ Неверный формат! Введите: `КОД СУММА КОЛИЧЕСТВО` (например: `SUMMER 100 10`)", parse_mode="Markdown")
+        await message.answer(
+            "❌ Неверный формат!\nВведите: <code>КОД СУММА ВСЕГО_АКТИВАЦИЙ [НА_ПОЛЬЗОВАТЕЛЯ]</code>\n"
+            "Пример: <code>SUMMER 100 50 1</code>",
+            parse_mode="HTML"
+        )
         return
 
-    code, amount, max_uses = parts[0], int(parts[1]), int(parts[2])
-    ok = await db.create_promocode(code, "bonus", amount, max_uses)
+    code = parts[0]
+    amount = int(parts[1])
+    max_uses = int(parts[2])
+    max_per_user = int(parts[3]) if len(parts) >= 4 and parts[3].isdigit() else 1
+
+    ok = await db.create_promocode(code, "bonus", amount, max_uses, max_per_user)
     await state.clear()
     if ok:
-        await message.answer(f"🎉 Промокод `{code.upper()}` на {amount} ₽ ({max_uses} активаций) успешно создан!", parse_mode="Markdown", reply_markup=admin_menu_kb())
+        await message.answer(
+            f"🎉 Промокод создан!\n\n"
+            f"🔑 Код: <code>{code.upper()}</code>\n"
+            f"💰 Сумма: <b>{amount} ₽</b>\n"
+            f"🔢 Всего активаций: <b>{max_uses}</b>\n"
+            f"👤 На одного пользователя: <b>{max_per_user}</b>",
+            parse_mode="HTML",
+            reply_markup=admin_menu_kb()
+        )
     else:
-        await message.answer("❌ Ошибка при создании. Возможно, такой промокод уже существует.")
+        await message.answer("❌ Ошибка! Возможно, такой промокод уже существует.")
 
 
 # ─────────────────────────────────────────────
