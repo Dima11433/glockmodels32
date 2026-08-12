@@ -37,6 +37,24 @@ async def invoice_watcher(bot: Bot, db: Database, payments: Payments, config) ->
         await asyncio.sleep(10)
 
 
+async def start_dummy_webserver():
+    """Фоновый HTTP сервер для бесплатного тарифа Render (Web Service), слушающий $PORT."""
+    port_str = os.getenv("PORT")
+    if not port_str:
+        return
+    try:
+        port = int(port_str)
+        async def handle(reader, writer):
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+        await asyncio.start_server(handle, "0.0.0.0", port)
+        logging.info(f"🌐 Dummy Web Server запущен на порту {port} для Render Free Tier")
+    except Exception as e:
+        logging.warning(f"Не удалось запустить dummy webserver: {e}")
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     config = load_config()
@@ -62,6 +80,7 @@ async def main() -> None:
     except Exception:
         logging.exception("Failed to start photo migration")
 
+    await start_dummy_webserver()
     watcher = asyncio.create_task(invoice_watcher(main_bot, db, payments, config))
     logging.info("✅ ОСНОВНОЙ БОТ запуск (с чеками, промо)")
 
