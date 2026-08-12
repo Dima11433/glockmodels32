@@ -230,43 +230,37 @@ async def send_tab(message: Message, db: Database, video_key: str, text: str, ma
 
 
 async def send_menu(message: Message, db: Database, text: str, markup=None, parse_mode: str = "HTML") -> None:
-    """Send main menu: show per-button descriptions under the menu if provided in settings.
-
-    For each button in keyboards.MAIN_BUTTONS we check settings key btn:desc:<suffix>.
-    If present, append short descriptions under the main message.
-    """
-    # collect per-button descriptions
-    desc_lines = []
-    try:
-        import keyboards
-        import texts as _texts
-        for suffix, title in keyboards.MAIN_BUTTONS:
-            desc = await db.get_setting(f"btn:desc:{suffix}") or getattr(_texts, f"BTN_DESC_{suffix.upper()}", "")
-            if desc:
-                desc_lines.append(f"{title} — {desc}")
-    except Exception:
-        desc_lines = []
-
+    """Send main menu with banner if any."""
     caption = text
-    if desc_lines:
-        caption = f"{text}\n\n" + "\n".join(desc_lines)
+    if "—" not in text:
+        desc_lines = []
+        try:
+            import keyboards
+            import texts as _texts
+            for suffix, title in keyboards.MAIN_BUTTONS:
+                desc = await db.get_setting(f"btn:desc:{suffix}") or getattr(_texts, f"BTN_DESC_{suffix.upper()}", "")
+                if desc:
+                    desc_lines.append(f"{title} — {desc}")
+        except Exception:
+            desc_lines = []
 
-    # Ограничиваем длину до 1024 символов для фото
+        if desc_lines:
+            caption = f"{text}\n\n" + "\n".join(desc_lines)
+
     if len(caption) > 1024:
         caption = caption[:1021] + "..."
 
-    # prefer global banner if any
     banner = await db.get_setting("btn:banner")
     if banner:
         try:
-            caption = caption[:1024] if len(caption) > 1024 else caption
             local = get_photo_local_path(banner)
             if local:
-                await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup)
+                await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup, parse_mode=parse_mode)
                 return
             fid = banner[8:] if banner.startswith("file_id:") else banner
-            await message.answer_photo(fid, caption=caption, reply_markup=markup)
+            await message.answer_photo(fid, caption=caption, reply_markup=markup, parse_mode=parse_mode)
             return
         except Exception:
             pass
-    await message.answer(caption, reply_markup=markup)
+
+    await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
