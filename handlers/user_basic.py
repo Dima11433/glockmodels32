@@ -408,6 +408,53 @@ async def profile(cb: CallbackQuery, db: Database, state: FSMContext):
     await cb.answer()
 
 
+@router.callback_query(F.data == "profile:discount")
+async def profile_discount(cb: CallbackQuery, db: Database):
+    user = await db.get_user(cb.from_user.id)
+    stats = await db.get_user_stats(cb.from_user.id)
+    loyalty = texts.get_loyalty_info(stats["total_spent_cents"])
+
+    spent_fmt = texts.fmt_rub_amount(loyalty["spent_rub"])
+    if loyalty["next_name"]:
+        target_fmt = texts.fmt_rub_amount(loyalty["next_target_rub"])
+        needed_fmt = texts.fmt_rub_amount(loyalty["needed_rub"])
+        spent_line = f"├ Потрачено: {spent_fmt} / {target_fmt}"
+        next_line = f"└ До уровня «{loyalty['next_name']}»: {needed_fmt}"
+    else:
+        spent_line = f"├ Потрачено: {spent_fmt}"
+        next_line = "└ Достигнут максимальный уровень!"
+
+    text = (
+        f"💲 <b>Личная скидка</b>\n\n"
+        f"Получайте постоянную скидку, повышая свой уровень покупателя. Уровень рассчитывается автоматически по общей сумме выполненных заказов.\n\n"
+        f"<b>Ваш статус</b>\n"
+        f"├ Уровень: {loyalty['name']}\n"
+        f"├ Личная скидка: {loyalty['percent']:.2f}%\n"
+        f"{spent_line}\n"
+        f"{next_line}\n\n"
+        f"<b>Уровни личной скидки</b>\n\n"
+        f"🥉 <b>Бронза — 0%</b>\n"
+        f"└ Сумма покупок от 0 ₽\n\n"
+        f"🥈 <b>Серебро — 2.50%</b>\n"
+        f"└ Сумма покупок от 10 000 ₽\n\n"
+        f"🥇 <b>Золото — 5%</b>\n"
+        f"└ Сумма покупок от 25 000 ₽\n\n"
+        f"💎 <b>Платина — 10%</b>\n"
+        f"└ Сумма покупок от 50 000 ₽\n\n"
+        f"<i>При достижении новой суммы статус обновится автоматически.</i>"
+    )
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="‹ Назад в профиль", callback_data="menu:profile")]
+    ])
+
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    await cb.answer()
+
+
 @router.callback_query(F.data == "menu:history")
 async def history(cb: CallbackQuery, db: Database, state: FSMContext):
     await state.clear()
