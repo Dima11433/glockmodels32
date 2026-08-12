@@ -1,6 +1,10 @@
 import asyncio
 import logging
 import os
+import sys
+
+# Гарантируем, что текущая директория бота добавлена в sys.path для импорта handlers
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from aiogram import Bot, Dispatcher
 
