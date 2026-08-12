@@ -24,15 +24,15 @@ def photo_file_id(message: Message) -> str | None:
     return None
 
 
-async def send_media(message: Message, media: str, caption: str, markup=None) -> None:
+async def send_media(message: Message, media: str, caption: str, markup=None, parse_mode: str = "HTML") -> None:
     kind, file_id = media.split("|", 1)
     # Ограничиваем длину подписи
     if len(caption) > 1024:
         caption = caption[:1021] + "..."
     if kind == "anim":
-        await message.answer_animation(file_id, caption=caption, reply_markup=markup)
+        await message.answer_animation(file_id, caption=caption, reply_markup=markup, parse_mode=parse_mode)
     else:
-        await message.answer_video(file_id, caption=caption, reply_markup=markup)
+        await message.answer_video(file_id, caption=caption, reply_markup=markup, parse_mode=parse_mode)
 
 
 def is_valid_file_id(fid: str) -> bool:
@@ -72,7 +72,7 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
     logger = logging.getLogger(__name__)
     
     if not file_ids:
-        await message.answer(caption, reply_markup=markup)
+        await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
         return
     
     # Извлекаем file_id или path из Row объектов
@@ -110,7 +110,7 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
     
     if not extracted_items:
         logger.warning(f"send_product_photos: no valid file_ids extracted, sending text only")
-        await message.answer(caption, reply_markup=markup)
+        await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
         return
     
     # Ограничиваем длину caption до 1024 символов для фото
@@ -145,14 +145,14 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
         try:
             # Если локальный файл — упаковываем в InputFile, иначе передаём file_id/URL
             if is_file or (isinstance(photo_path, str) and Path(photo_path).exists()):
-                media.append(InputMediaPhoto(media=FSInputFile(photo_path), caption=caption if i == 0 else None))
+                media.append(InputMediaPhoto(media=FSInputFile(photo_path), caption=caption if i == 0 else None, parse_mode=parse_mode if i == 0 else None))
             else:
-                media.append(InputMediaPhoto(media=photo_path, caption=caption if i == 0 else None))
+                media.append(InputMediaPhoto(media=photo_path, caption=caption if i == 0 else None, parse_mode=parse_mode if i == 0 else None))
         except Exception as e:
             logger.error(f"send_product_photos: error preparing media {i}: {e}")
     
     if not media:
-        await message.answer(caption, reply_markup=markup)
+        await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
         return
     
     try:
@@ -160,7 +160,7 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
         await message.answer_media_group(media)
         # Отправляем кнопки отдельно после альбома
         if markup is not None:
-            await message.answer("Выберите действие:", reply_markup=markup)
+            await message.answer("Выберите действие:", reply_markup=markup, parse_mode=parse_mode)
     except Exception as e:
         logger.error(f"send_product_photos: error sending media group: {e}")
         # Fallback - пробуем отправить каждое фото отдельно
@@ -170,26 +170,26 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
                 photo_caption = caption if i == 0 else None
                 try:
                     if is_file or (isinstance(photo_path, str) and Path(photo_path).exists()):
-                        await message.answer_photo(InputFile(photo_path), caption=photo_caption)
+                        await message.answer_photo(InputFile(photo_path), caption=photo_caption, parse_mode=parse_mode if i == 0 else None)
                     else:
-                        await message.answer_photo(photo_path, caption=photo_caption)
+                        await message.answer_photo(photo_path, caption=photo_caption, parse_mode=parse_mode if i == 0 else None)
                 except Exception as e:
                     logger.error(f"send_product_photos: error sending individual photo {i}: {e}")
             if markup is not None:
-                await message.answer("Выберите действие:", reply_markup=markup)
+                await message.answer("Выберите действие:", reply_markup=markup, parse_mode=parse_mode)
         except Exception as e2:
             logger.error(f"send_product_photos: error in fallback: {e2}")
             # Последний fallback - отправляем только текст
-            await message.answer(caption, reply_markup=markup)
+            await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
 
 
-async def send_tab(message: Message, db: Database, video_key: str, text: str, markup=None, banner_suffix: str | None = None) -> None:
+async def send_tab(message: Message, db: Database, video_key: str, text: str, markup=None, banner_suffix: str | None = None, parse_mode: str = "HTML") -> None:
     """Send a tab: prefer video (video_key). If no video, show banner for banner_suffix (btn:banner:<suffix>),
     then fallback to global btn:banner, then plaintext."""
     media = await db.get_setting(video_key)
     if media:
         try:
-            await send_media(message, media, text, markup)
+            await send_media(message, media, text, markup, parse_mode=parse_mode)
             return
         except Exception:
             pass
@@ -203,10 +203,10 @@ async def send_tab(message: Message, db: Database, video_key: str, text: str, ma
                 caption = text[:1024] if len(text) > 1024 else text
                 local = get_photo_local_path(banner)
                 if local:
-                    await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup)
+                    await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup, parse_mode=parse_mode)
                 else:
                     fid = banner[8:] if banner.startswith("file_id:") else banner
-                    await message.answer_photo(fid, caption=caption, reply_markup=markup)
+                    await message.answer_photo(fid, caption=caption, reply_markup=markup, parse_mode=parse_mode)
                 return
             except Exception:
                 pass
@@ -218,18 +218,18 @@ async def send_tab(message: Message, db: Database, video_key: str, text: str, ma
             caption = text[:1024] if len(text) > 1024 else text
             local = get_photo_local_path(banner)
             if local:
-                await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup)
+                await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup, parse_mode=parse_mode)
             else:
                 fid = banner[8:] if banner.startswith("file_id:") else banner
-                await message.answer_photo(fid, caption=caption, reply_markup=markup)
+                await message.answer_photo(fid, caption=caption, reply_markup=markup, parse_mode=parse_mode)
             return
         except Exception:
             pass
 
-    await message.answer(text, reply_markup=markup)
+    await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
 
 
-async def send_menu(message: Message, db: Database, text: str, markup=None) -> None:
+async def send_menu(message: Message, db: Database, text: str, markup=None, parse_mode: str = "HTML") -> None:
     """Send main menu: show per-button descriptions under the menu if provided in settings.
 
     For each button in keyboards.MAIN_BUTTONS we check settings key btn:desc:<suffix>.
