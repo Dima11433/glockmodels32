@@ -35,33 +35,35 @@ async def noop(cb: CallbackQuery):
 
 
 @router.callback_query(F.data.in_({"check_subscription", "check_mirror_subscription"}))
-async def check_subscription(cb: CallbackQuery, db: Database, bot: Bot):
+async def check_subscription(cb: CallbackQuery, db: Database, bot: Bot, mirror: dict | None = None):
     """Проверяет подписку когда пользователь нажал «Я подписался»"""
-    from middleware import MAIN_CHANNEL_USERNAME, MAIN_CHANNEL_LINK
+    # Получаем список обязательных каналов
+    channels = await db.list_required_channels()
+    ch_list = []
+    if mirror:
+        if mirror.get("channel_username"):
+            ch_list.append({"username": mirror["channel_username"], "link": mirror.get("channel_link") or f"https://t.me/{mirror['channel_username']}"})
+    for ch in channels:
+        ch_list.append({"username": ch["username"], "link": f"https://t.me/{ch['username']}"})
 
-    # Определяем какой канал проверять
-    if cb.data == "check_mirror_subscription":
-        mirror = await db.get_mirror_by_token(bot.token)
-        ch_username = mirror["channel_username"] if mirror else None
-        ch_link = mirror["channel_link"] if mirror else None
-    else:
-        ch_username = MAIN_CHANNEL_USERNAME
-        ch_link = MAIN_CHANNEL_LINK
-
-    if not ch_username:
+    # Если пуст — разрешаем доступ
+    if not ch_list:
         await cb.answer("✅ Доступ открыт!", show_alert=False)
-        # Показываем главное меню
         markup = await keyboards.main_menu(db)
         await send_menu(cb.message, db, texts.MENU, markup)
         return
 
-    try:
-        member = await bot.get_chat_member(f"@{ch_username}", cb.from_user.id)
-        is_subscribed = member.status in ("member", "administrator", "creator")
-    except Exception:
-        is_subscribed = True  # При ошибке не блокируем
+    missing = []
+    for ch in ch_list:
+        try:
+            member = await bot.get_chat_member(f"@{ch['username']}", cb.from_user.id)
+            is_subscribed = member.status in ("member", "administrator", "creator")
+        except Exception:
+            is_subscribed = False
+        if not is_subscribed:
+            missing.append(ch)
 
-    if is_subscribed:
+    if not missing:
         await cb.answer("✅ Подписка подтверждена!", show_alert=False)
         try:
             await cb.message.delete()
@@ -72,7 +74,7 @@ async def check_subscription(cb: CallbackQuery, db: Database, bot: Bot):
         await send_menu(cb.message, db, texts.MENU, markup)
     else:
         await cb.answer(
-            "❌ Вы ещё не подписались на канал!\nПодпишитесь и нажмите кнопку снова.",
+            "❌ Вы ещё не подписались на все необходимые каналы!\nПодпишитесь и нажмите кнопку снова.",
             show_alert=True
         )
 
@@ -167,31 +169,47 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, stat
     # ───────────────────────────────────────────
 
 
-    welcome_text = texts.WELCOME
-    await message.answer(welcome_text, reply_markup=ReplyKeyboardRemove())
+    # Проверяем рекламу в приветствии
+    welcome_ad = await db.get_active_welcome_ad()
+    ad_block = f"\n\n⭐ <b>СПОНСОР:</b>\n{welcome_ad['text_content']}" if welcome_ad else ""
+    welcome_text = texts.WELCOME + ad_block
+    await message.answer(welcome_text, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
 
     markup = await keyboards.main_menu(db)
     await send_menu(message, db, texts.MENU, markup)
 
 
-
 @router.callback_query(F.data == "menu:more")
-async def more_menu(cb: CallbackQuery, state: FSMContext):
+async def more_menu(cb: CallbackQuery, db: Database, state: FSMContext):
     await state.clear()
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📜 История", callback_data="menu:history")],
-        [InlineKeyboardButton(text="🤝 Рефералка", callback_data="menu:referral")],
-        [InlineKeyboardButton(text="💸 Создать чек", callback_data="create_check_btn")],
-        [InlineKeyboardButton(text="🎫 Промокод", callback_data="activate_promo_btn")],
-        [InlineKeyboardButton(text="📚 О магазине", callback_data="menu:about")],
-        [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main")],
-    ])
-    try:
-        await cb.message.edit_text("⚙️ Дополнительное меню:", reply_markup=markup)
-    except Exception:
-        await cb.message.answer("⚙️ Дополнительное меню:", reply_markup=markup)
-    await cb.answer()
+    our_projects_url = await db.get_setting("link:our_projects_url")
 
+    async def g(key: str, default: str) -> str:
+        v = await db.get_setting(f"btn:{key}")
+        return v or default
+
+    s_history = await g("history", "💎 История")
+    s_referral = await g("referral", "💎 Рефералка")
+    s_check = await g("create_check", "💎 Создать чек")
+    s_promo = await g("promocode", "💎 Промокод")
+    s_ads = await g("ads", "💎 Реклама")
+    s_about = await g("about", "💎 О магазине")
+
+    rows = [
+        [InlineKeyboardButton(text=s_history, callback_data="menu:history"),
+         InlineKeyboardButton(text=s_referral, callback_data="menu:referral")],
+        [InlineKeyboardButton(text=s_ads, callback_data="menu:ads")],
+        [InlineKeyboardButton(text=s_check, callback_data="create_check_btn"),
+         InlineKeyboardButton(text=s_promo, callback_data="activate_promo_btn")],
+    ]
+    if our_projects_url and our_projects_url.strip() and our_projects_url.strip() != "https://t.me/":
+        rows.append([InlineKeyboardButton(text="❇️ Наши проекты", url=our_projects_url.strip())])
+    rows.append([InlineKeyboardButton(text=s_about, callback_data="menu:about")])
+    rows.append([InlineKeyboardButton(text="💎 Главное меню", callback_data="menu:main")])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    await send_tab(cb.message, db, "video:tab:more", "⚙️ <b>Дополнительное меню:</b>", markup, banner_suffix="more")
+    await cb.answer()
 
 @router.callback_query(F.data == "menu:catalog")
 async def catalog(cb: CallbackQuery, db: Database, state: FSMContext):
@@ -564,21 +582,45 @@ class ReviewState(StatesGroup):
 
 
 @router.callback_query(F.data == "menu:about")
-async def about_project(cb: CallbackQuery, state: FSMContext):
+async def about_project(cb: CallbackQuery, db: Database, state: FSMContext):
     await state.clear()
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-       [InlineKeyboardButton(text="📚 FAQ", callback_data="about:faq")],
-       [InlineKeyboardButton(text="📺 Реклама", url="https://t.me/glock_price")],
-       [InlineKeyboardButton(text="📰 Новостной канал", url="https://t.me/news_glock_shop")],
-       [InlineKeyboardButton(text="⭐ Отзывы", url="https://t.me/reps_glock_shop")],
-       [InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main")],
-    ])
+    
+    # Загружаем каналы из БД
+    db_channels = await db.list_about_channels()
+    our_projects_url = await db.get_setting("link:our_projects_url")
+
+    rows = [
+        [InlineKeyboardButton(text="📚 FAQ", callback_data="about:faq")]
+    ]
+
+    # Если задана отдельная ссылка на Наши проекты
+    if our_projects_url and our_projects_url.strip() and our_projects_url.strip() != "https://t.me/":
+        rows.append([InlineKeyboardButton(text="❇️ Наши проекты", url=our_projects_url.strip())])
+
+    # Если есть каналы в БД
+    if db_channels:
+        for ch in db_channels:
+            uname = ch["username"] or ""
+            title = ch["title"] or (f"@{uname}" if uname else "Канал")
+            url = ch["url"] or (f"https://t.me/{uname}" if uname else None)
+            if url:
+                rows.append([InlineKeyboardButton(text=title, url=url)])
+    else:
+        # Стандартные каналы по умолчанию, если админ ещё не добавил свои
+        rows.extend([
+            [InlineKeyboardButton(text="📺 Реклама", url="https://t.me/glock_price")],
+            [InlineKeyboardButton(text="📰 Новостной канал", url="https://t.me/news_glock_shop")],
+            [InlineKeyboardButton(text="⭐ Отзывы", url="https://t.me/reps_glock_shop")],
+        ])
+
+    rows.append([InlineKeyboardButton(text="⬅️ Главное меню", callback_data="menu:main")])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
     try:
         await cb.message.edit_text(texts.ABOUT_PROJECT, reply_markup=markup)
     except Exception:
         await cb.message.answer(texts.ABOUT_PROJECT, reply_markup=markup)
     await cb.answer()
-
 
 @router.callback_query(F.data == "about:faq")
 async def about_faq(cb: CallbackQuery):
@@ -741,17 +783,31 @@ async def menu_main(cb: CallbackQuery, db: Database, state: FSMContext):
 @router.callback_query(F.data == "menu:support")
 async def menu_support(cb: CallbackQuery, state: FSMContext, db: Database):
     await state.clear()
-    support_url = await db.get_setting("link:support")
+    support_url = await db.get_setting("link:support_url") or await db.get_setting("link:support")
+    backup_url = await db.get_setting("link:support_backup_url") or "https://t.me/glock_admin_bot"
+
     buttons = []
-    if support_url:
-        buttons.append([InlineKeyboardButton(text="💬 Написать в поддержку", url=support_url)])
+    if support_url and support_url.strip() and support_url.strip() != "https://t.me/":
+        buttons.append([InlineKeyboardButton(text="💬 Основная поддержка", url=support_url.strip())])
+    
+    if backup_url and backup_url.strip():
+        buttons.append([InlineKeyboardButton(text="🆘 Резервная поддержка (@glock_admin_bot)", url=backup_url.strip())])
+
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")])
     
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    text = (
+        "💬 <b>СЛУЖБА ПОДДЕРЖКИ</b>\n\n"
+        "Если у вас возникли вопросы, трудности с оплатой или получением товара — мы на связи!\n\n"
+        "⏰ <b>Режим работы:</b> 24/7\n"
+        "⚡ <b>Среднее время ответа:</b> 5–10 минут\n\n"
+        "📌 <i>Если основная техподдержка не отвечает — обязательно напишите в нашего резервного бота поддержки:</i>\n"
+        "👉 @glock_admin_bot"
+    )
     try:
-        await cb.message.edit_text(texts.SUPPORT_INFO, reply_markup=markup)
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
     except Exception:
-        await cb.message.answer(texts.SUPPORT_INFO, reply_markup=markup)
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
     await cb.answer()
 
 

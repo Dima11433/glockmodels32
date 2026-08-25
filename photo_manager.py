@@ -82,22 +82,30 @@ async def migrate_photos(bot: Bot, db) -> int:
                 print('migrate_photos error', e)
         await db.conn.commit()
 
-        # --- settings (btn banners) ---
-        cur = await db.conn.execute("SELECT key, value FROM settings WHERE key LIKE 'btn:banner%'")
+        # --- settings (btn banners & videos) ---
+        cur = await db.conn.execute("SELECT key, value FROM settings WHERE key LIKE 'btn:banner%' OR key LIKE 'video:%'")
         settings = await cur.fetchall()
         for s in settings:
             key = s['key']
-            val = s['value']
+            val = str(s['value'] or "").strip()
             if not val:
                 continue
-            if val.startswith('photos/') or val.startswith('/photos/') or val.startswith('http') or val.startswith('file_id:'):
-                continue
-            try:
-                saved = await download_and_save_photo(bot, val, 0, 0)
-                await db.conn.execute("UPDATE settings SET value = ? WHERE key = ?", (saved, key))
+
+            # Исправляем возможные битые префиксы
+            if val.startswith("file_id:anim|") or val.startswith("file_id:video|") or val.startswith("file_id:photo|"):
+                clean_val = val.replace("file_id:", "")
+                await db.conn.execute("UPDATE settings SET value = ? WHERE key = ?", (clean_val, key))
                 migrated += 1
-            except Exception as e:
-                print('migrate_settings_banner error', e)
+                continue
+
+            # Если уже правильный формат с префиксом (anim|, video|, photo|, photos/, http) - не трогаем!
+            if val.startswith(('anim|', 'video|', 'photo|', 'photos/', '/photos/', 'http://', 'https://')):
+                continue
+
+            # Если чистый file_id без префикса, определяем его как photo|
+            if not val.startswith('photos/') and not val.startswith('file_id:'):
+                await db.conn.execute("UPDATE settings SET value = ? WHERE key = ?", (f"photo|{val}", key))
+                migrated += 1
         await db.conn.commit()
 
         # --- categories (video_file_id) ---

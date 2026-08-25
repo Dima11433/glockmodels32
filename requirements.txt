@@ -1,5 +1,6 @@
 aiogram>=3.13
 aiosqlite>=0.20
 aiocryptopay>=0.3.4
+aiohttp>=3.9
 python-dotenv>=1.0
 aiofiles>=23.0

@@ -15,10 +15,21 @@ router = Router()
 
 
 class AdminFilter(BaseFilter):
-    async def __call__(self, event: TelegramObject, config: Config) -> bool:
+    async def __call__(self, event: TelegramObject, config: Config, db: Database) -> bool:
         user = getattr(event, "from_user", None)
-        return bool(user and user.username and config.admin_username
-                    and user.username.lower() == config.admin_username.lower())
+        if not user:
+            return False
+        # Check legacy single admin from config
+        if user.username and config.admin_username and user.username.lower() == config.admin_username.lower():
+            return True
+        # Check database admins by user_id or username
+        try:
+            if await db.is_admin(user.id, user.username):
+                return True
+        except Exception:
+            # If DB not available for some reason, deny access
+            return False
+        return False
 
 
 router.message.filter(AdminFilter())
@@ -82,16 +93,21 @@ class AddBalance(StatesGroup):
 
 def admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📁 Разделы", callback_data="adm:cats"),
-         InlineKeyboardButton(text="📦 Товары", callback_data="adm:prods")],
+        [InlineKeyboardButton(text="👑 Админы", callback_data="adm:admins"),
+         InlineKeyboardButton(text="📁 Разделы", callback_data="adm:cats")],
+        [InlineKeyboardButton(text="📦 Товары", callback_data="adm:prods"),
+         InlineKeyboardButton(text="📢 Автопостинг", callback_data="adm:autopost")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="adm:users"),
          InlineKeyboardButton(text="📋 Логи", callback_data="adm:logs")],
         [InlineKeyboardButton(text="📨 Рассылка", callback_data="adm:mailing"),
-         InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats")],
-        [InlineKeyboardButton(text="💳 Выплаты Зеркал", callback_data="adm:withdrawals"),
-         InlineKeyboardButton(text="🎫 Создать Промокод", callback_data="adm:create_promo")],
-        [InlineKeyboardButton(text="🔗 Ссылки", callback_data="adm:links"),
-         InlineKeyboardButton(text="🎨 Дизайн кнопок", callback_data="adm:btns")],
+         InlineKeyboardButton(text="🌴 Реклама & Брони", callback_data="adm:ads")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm:stats"),
+         InlineKeyboardButton(text="💳 Выплаты Зеркал", callback_data="adm:withdrawals")],
+        [InlineKeyboardButton(text="🎫 Создать Промокод", callback_data="adm:create_promo"),
+         InlineKeyboardButton(text="🔗 Ссылки", callback_data="adm:links")],
+        [InlineKeyboardButton(text="🎨 Дизайн кнопок", callback_data="adm:btns"),
+         InlineKeyboardButton(text="ℹ️ О Магазине", callback_data="adm:about_channels")],
+        [InlineKeyboardButton(text="📣 Обяз.подп.", callback_data="adm:req_channels")],
     ])
 
 
@@ -99,6 +115,295 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
 async def admin_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("⚙️ Админ-панель", reply_markup=admin_menu_kb())
+
+
+class AdminManage(StatesGroup):
+    add_username = State()
+    set_role = State()
+
+
+@router.callback_query(F.data == "adm:admins")
+async def adm_admins(cb: CallbackQuery, db: Database):
+    admins = await db.list_admins()
+    lines = ["👑 Админы:"]
+    rows = []
+    for a in admins:
+        name = a["username"] or (str(a["user_id"]) if a["user_id"] else f"(id:{a['id']})")
+        lines.append(f"{name} — {a['role']}")
+        rows.append([
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm:admin_del:{a['id']}"),
+            InlineKeyboardButton(text="✏️ Роль", callback_data=f"adm:admin_role:{a['id']}")
+        ])
+    rows.append([InlineKeyboardButton(text="➕ Добавить админа", callback_data="adm:add_admin")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
+    await cb.message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:add_admin")
+async def adm_add_admin(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminManage.add_username)
+    await cb.message.answer("Введите username (с @ или без) или numeric id пользователя, которого сделать админом:")
+    await cb.answer()
+
+
+@router.message(AdminManage.add_username, F.text)
+async def adm_add_admin_done(message: Message, db: Database, state: FSMContext):
+    text = message.text.strip()
+    user_id = None
+    username = None
+    if text.isdigit():
+        user_id = int(text)
+    else:
+        username = text.lstrip("@")
+    await db.add_admin(user_id, username, 'product')
+    await state.clear()
+    await message.answer("✅ Админ добавлен.", reply_markup=admin_menu_kb())
+
+
+@router.callback_query(F.data.startswith("adm:admin_del:"))
+async def adm_admin_del(cb: CallbackQuery, db: Database):
+    aid = int(cb.data.split(":")[2])
+    await db.remove_admin_by_id(aid)
+    await cb.answer("Удалён ✅")
+
+
+@router.callback_query(F.data.startswith("adm:admin_role:"))
+async def adm_admin_role(cb: CallbackQuery, db: Database, state: FSMContext):
+    aid = int(cb.data.split(":")[2])
+    await state.set_state(AdminManage.set_role)
+    await state.update_data(admin_id=aid)
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👑 Суперадмин (полные права)", callback_data="adm:role_choice:super")],
+        [InlineKeyboardButton(text="📦 Товары", callback_data="adm:role_choice:product")],
+        [InlineKeyboardButton(text="📁 Разделы", callback_data="adm:role_choice:category")],
+        [InlineKeyboardButton(text="📨 Рассылка", callback_data="adm:role_choice:mailing")],
+        [InlineKeyboardButton(text="⬅️ Отмена", callback_data="adm:admins")],
+    ])
+    await cb.message.answer("Выберите роль для админа:", reply_markup=markup)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:role_choice:"))
+async def adm_role_choice(cb: CallbackQuery, db: Database, state: FSMContext):
+    role = cb.data.split(":")[2]
+    data = await state.get_data()
+    admin_id = data.get("admin_id")
+    if not admin_id:
+        return await cb.answer("Что-то пошло не так", show_alert=True)
+    await db.set_admin_role_by_id(admin_id, role)
+    await state.clear()
+    await cb.message.answer("✅ Роль обновлена.", reply_markup=admin_menu_kb())
+    await cb.answer()
+
+
+# --- каналы покупки ---
+
+class ChannelManage(StatesGroup):
+    add_channel = State()
+
+
+@router.callback_query(F.data == "adm:channels")
+async def adm_channels(cb: CallbackQuery, db: Database):
+    channels = await db.list_purchase_channels()
+    lines = ["📣 Каналы для обязательной подписки перед покупкой:"]
+    rows = []
+    if channels:
+        for ch in channels:
+            uname = ch["username"]
+            title = ch["title"] or ""
+            lines.append(f"@{uname} {('- '+title) if title else ''}")
+            rows.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm:channel_del:{ch['id']}")])
+    else:
+        lines.append("(пока не добавлено)")
+    rows.append([InlineKeyboardButton(text="➕ Добавить канал", callback_data="adm:add_channel")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
+    await cb.message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:add_channel")
+async def adm_add_channel(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(ChannelManage.add_channel)
+    await cb.message.answer("Пришлите username канала (с @ или без) или ссылку на канал (https://t.me/...) :")
+    await cb.answer()
+
+
+@router.message(ChannelManage.add_channel, F.text)
+async def adm_add_channel_done(message: Message, db: Database, state: FSMContext):
+    text = message.text.strip()
+    if text.startswith("https://t.me/"):
+        uname = text.split("t.me/")[1].strip('/')
+    else:
+        uname = text.lstrip('@')
+    await db.add_purchase_channel(uname, None)
+    await state.clear()
+    await message.answer("✅ Канал добавлен.", reply_markup=admin_menu_kb())
+
+
+@router.callback_query(F.data.startswith("adm:channel_del:"))
+async def adm_channel_del(cb: CallbackQuery, db: Database):
+    cid = int(cb.data.split(":")[2])
+    await db.remove_purchase_channel(cid)
+    await cb.answer("Удалён ✅")
+
+
+# --- обязательные каналы для использования бота ---
+
+class ReqChannelManage(StatesGroup):
+    add_channel = State()
+
+
+@router.callback_query(F.data == "adm:req_channels")
+async def adm_req_channels(cb: CallbackQuery, db: Database):
+    channels = await db.list_required_channels()
+    lines = ["📣 Обязательная подписка (для использования бота):"]
+    rows = []
+    if channels:
+        for ch in channels:
+            uname = ch["username"]
+            title = ch["title"] or ""
+            lines.append(f"@{uname} {('- '+title) if title else ''}")
+            rows.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm:req_channel_del:{ch['id']}")])
+    else:
+        lines.append("(пока не добавлено)")
+    rows.append([InlineKeyboardButton(text="➕ Добавить канал", callback_data="adm:add_req_channel")])
+    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
+    await cb.message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:add_req_channel")
+async def adm_add_req_channel(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(ReqChannelManage.add_channel)
+    await cb.message.answer("Пришлите username канала (с @ или без) или ссылку на канал (https://t.me/...) :")
+    await cb.answer()
+
+
+@router.message(ReqChannelManage.add_channel, F.text)
+async def adm_add_req_channel_done(message: Message, db: Database, state: FSMContext):
+    text = message.text.strip()
+    if text.startswith("https://t.me/"):
+        uname = text.split("t.me/")[1].strip('/')
+    else:
+        uname = text.lstrip('@')
+    await db.add_required_channel(uname, None)
+    await state.clear()
+    await message.answer("✅ Канал добавлен.", reply_markup=admin_menu_kb())
+
+
+@router.callback_query(F.data.startswith("adm:req_channel_del:"))
+async def adm_req_channel_del(cb: CallbackQuery, db: Database):
+    cid = int(cb.data.split(":")[2])
+    await db.remove_required_channel(cid)
+    await cb.answer("Удалён ✅")
+
+
+# --- О Магазине / О проекте (админка) ---
+class AboutChannelManage(StatesGroup):
+    add_channel = State()
+
+
+@router.callback_query(F.data == "adm:about_channels")
+async def adm_about_channels(cb: CallbackQuery, db: Database):
+    channels = await db.list_about_channels()
+    lines = ["ℹ️ <b>Раздел «О Магазине / О проекте»:</b>\n"]
+    rows = []
+    if channels:
+        for ch in channels:
+            cid = ch["id"] if "id" in ch.keys() else ch[0]
+            uname = ch["username"] or ""
+            title = ch["title"] or ""
+            url = ch["url"] or (f"https://t.me/{uname}" if uname else None)
+            label = title or (f"@{uname}" if uname else (url or "Ссылка"))
+            lines.append(f"• <b>{label}</b>\n  └ {url or uname}")
+            
+            btns = [
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm:about_channel_del:{cid}")
+            ]
+            if url:
+                btns.append(InlineKeyboardButton(text="🔗 Открыть", url=url))
+            rows.append(btns)
+    else:
+        lines.append("<i>(Каналы пока не добавлены)</i>")
+
+    rows.append([InlineKeyboardButton(text="➕ Добавить канал / проект", callback_data="adm:add_about_channel")])
+    rows.append([InlineKeyboardButton(text="⬅️ Админ-меню", callback_data="adm:menu")])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await cb.message.edit_text("\n".join(lines), reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer("\n".join(lines), reply_markup=markup, parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:add_about_channel")
+async def adm_add_about_channel(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AboutChannelManage.add_channel)
+    text = (
+        "➕ <b>Добавление канала / проекта</b>\n\n"
+        "Отправьте username или ссылку. Также можно указать название через <code>|</code>:\n\n"
+        "<b>Примеры:</b>\n"
+        "• <code>@news_channel | 📰 Новости магазина</code>\n"
+        "• <code>https://t.me/our_projects | ❇️ Наши проекты</code>\n"
+        "• <code>https://t.me/reps_channel | ⭐ Отзывы</code>\n"
+        "• <code>@glock_price</code>"
+    )
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:about_channels")]
+    ])
+    await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    await cb.answer()
+
+
+@router.message(AboutChannelManage.add_channel, F.text)
+async def adm_add_about_channel_done(message: Message, db: Database, state: FSMContext):
+    raw = message.text.strip()
+    parts = [p.strip() for p in raw.split("|", 1)]
+    
+    # Определяем где ссылка, а где название
+    if len(parts) == 2:
+        p0, p1 = parts[0], parts[1]
+        if p0.startswith("http://") or p0.startswith("https://") or p0.startswith("@") or "t.me/" in p0:
+            identifier, title = p0, p1
+        else:
+            title, identifier = p0, p1
+    else:
+        identifier = parts[0]
+        title = None
+
+    username = None
+    url = None
+    if identifier.startswith("http://") or identifier.startswith("https://"):
+        url = identifier
+        if "t.me/" in identifier:
+            username = identifier.split("t.me/")[1].strip("/").split("/")[0]
+    elif identifier.startswith("@") or ("_" in identifier or identifier.isalnum()):
+        username = identifier.lstrip("@")
+        url = f"https://t.me/{username}"
+    else:
+        url = identifier
+
+    if not title:
+        title = f"@{username}" if username else url
+
+    await db.add_about_channel(username=username, title=title, url=url)
+    await state.clear()
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="ℹ️ К списку каналов", callback_data="adm:about_channels")],
+        [InlineKeyboardButton(text="⬅️ Админ-меню", callback_data="adm:menu")]
+    ])
+    await message.answer(f"✅ Канал/проект <b>{title}</b> успешно добавлен!\nСсылка: <code>{url}</code>", reply_markup=markup, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("adm:about_channel_del:"))
+async def adm_about_channel_del(cb: CallbackQuery, db: Database):
+    cid = int(cb.data.split(":")[2])
+    await db.remove_about_channel(cid)
+    await cb.answer("Удалено ✅")
+    await adm_about_channels(cb, db)
 
 
 @router.callback_query(F.data == "adm:menu")
@@ -269,68 +574,7 @@ async def adm_link_done(message: Message, db: Database, state: FSMContext):
     await message.answer("✅ Ссылка сохранена.", reply_markup=admin_menu_kb())
 
 
-@router.callback_query(F.data == "adm:btns")
-async def adm_btns(cb: CallbackQuery, db: Database):
-    lines = ["🎨 Дизайн кнопок:"]
-    rows = []
-    # Banner info
-    banner = await db.get_setting("btn:banner")
-    lines.append(f"Глобальный баннер: {'есть ✅' if banner else 'нет'}")
-    # Button to manage global banner
-    rows.append([InlineKeyboardButton(text="🖼️ Глобальный баннер", callback_data="adm:btn_banner")])
-    if banner:
-        rows.append([InlineKeyboardButton(text="🗑 Удалить глобальный баннер", callback_data="adm:btn_banner_del")])
 
-    for suffix, title in BUTTONS:
-        # per-button text and banner
-        value = await db.get_setting(f"btn:{suffix}") or getattr(texts, f"BTN_{suffix.upper()}", title)
-        pb = await db.get_setting(f"btn:banner:{suffix}")
-        lines.append(f"{title}: {value} | Баннер: {'есть ✅' if pb else 'нет'}")
-        btns = [InlineKeyboardButton(text=f"✏️ {title}", callback_data=f"adm:btn:{suffix}")]
-        btns.append(InlineKeyboardButton(text="📝 Описание", callback_data=f"adm:btn_desc:{suffix}"))
-        btns.append(InlineKeyboardButton(text="🖼 Баннер", callback_data=f"adm:btn_banner:{suffix}"))
-        if pb:
-            btns.append(InlineKeyboardButton(text="🗑 Удал.баннер", callback_data=f"adm:btn_banner_del:{suffix}"))
-        rows.append(btns)
-    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
-    await cb.message.answer("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith("adm:btn:"))
-async def adm_btn_edit(cb: CallbackQuery, state: FSMContext):
-    suffix = cb.data.split(":")[2]
-    await state.set_state(ButtonEdit.value)
-    await state.update_data(suffix=suffix)
-    await cb.message.answer("Введите новый текст для кнопки:")
-    await cb.answer()
-
-
-@router.message(ButtonEdit.value, F.text)
-async def adm_btn_edit_done(message: Message, db: Database, state: FSMContext):
-    text = message.text.strip()
-    data = await state.get_data()
-    await db.set_setting(f"btn:{data['suffix']}", text)
-    await state.clear()
-    await message.answer("✅ Сохранено.", reply_markup=admin_menu_kb())
-
-
-@router.callback_query(F.data.startswith("adm:btn_desc:"))
-async def adm_btn_desc_edit(cb: CallbackQuery, state: FSMContext):
-    suffix = cb.data.split(":")[2]
-    await state.set_state(DescriptionEdit.value)
-    await state.update_data(suffix=suffix)
-    await cb.message.answer("Введите короткое описание для этой кнопки (1-2 предложения):")
-    await cb.answer()
-
-
-@router.message(DescriptionEdit.value, F.text)
-async def adm_btn_desc_done(message: Message, db: Database, state: FSMContext):
-    text = message.text.strip()
-    data = await state.get_data()
-    await db.set_setting(f"btn:desc:{data['suffix']}", text)
-    await state.clear()
-    await message.answer("✅ Описание сохранено.", reply_markup=admin_menu_kb())
 
 
 @router.callback_query(F.data == "adm:btn_banner")
@@ -338,14 +582,25 @@ async def adm_btn_banner(cb: CallbackQuery, state: FSMContext):
     # global banner upload
     await state.set_state(BannerUpload.photo)
     await state.update_data(banner_suffix=None)
-    await cb.message.answer("Пришлите фото для глобального баннера меню (или отправьте /remove чтобы удалить текущий баннер):")
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить текущий баннер", callback_data="adm:btn_banner_del")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:btns")],
+    ])
+    await cb.message.answer(
+        "🖼 <b>Глобальный баннер меню</b>\n\n"
+        "Отправьте <b>фото</b>, <b>GIF-анимацию</b> или <b>видео</b> (или /remove для удаления):",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
     await cb.answer()
 
 
 @router.callback_query(F.data == "adm:btn_banner_del")
-async def adm_btn_banner_del(cb: CallbackQuery, db: Database):
+async def adm_btn_banner_del(cb: CallbackQuery, db: Database, state: FSMContext):
+    await state.clear()
     await db.delete_setting("btn:banner")
     await cb.answer("Глобальный баннер удалён ✅")
+    await cb.message.answer("✅ Глобальный баннер удалён.", reply_markup=admin_menu_kb())
 
 
 @router.callback_query(F.data.startswith("adm:btn_banner:"))
@@ -354,44 +609,61 @@ async def adm_btn_banner_for(cb: CallbackQuery, state: FSMContext):
     suffix = cb.data.split(":")[2]
     await state.set_state(BannerUpload.photo)
     await state.update_data(banner_suffix=suffix)
-    await cb.message.answer(f"Пришлите фото для баннера кнопки '{suffix}' (или отправьте /remove чтобы удалить текущий баннер):")
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить баннер", callback_data=f"adm:btn_banner_del:{suffix}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:btns")],
+    ])
+    await cb.message.answer(
+        f"🖼 <b>Баннер для раздела '{suffix}'</b>\n\n"
+        f"Отправьте <b>фото</b>, <b>GIF-анимацию</b> или <b>видео</b> (или /remove для удаления):",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith("adm:btn_banner_del:"))
-async def adm_btn_banner_del_for(cb: CallbackQuery, db: Database):
+async def adm_btn_banner_del_for(cb: CallbackQuery, db: Database, state: FSMContext):
+    await state.clear()
     suffix = cb.data.split(":")[2]
     await db.delete_setting(f"btn:banner:{suffix}")
     await cb.answer("Баннер кнопки удалён ✅")
+    await cb.message.answer(f"✅ Баннер кнопки '{suffix}' удалён.", reply_markup=admin_menu_kb())
 
 
 @router.message(BannerUpload.photo)
 async def adm_btn_banner_done(message: Message, db: Database, state: FSMContext, bot: Bot):
-    file_id = photo_file_id(message)
-    if not file_id:
-        return await message.answer("Это не фото. Пришлите фото или /remove")
+    if message.text and message.text.strip() == "/remove":
+        data = await state.get_data()
+        suffix = data.get("banner_suffix")
+        if suffix:
+            await db.delete_setting(f"btn:banner:{suffix}")
+        else:
+            await db.delete_setting("btn:banner")
+        await state.clear()
+        return await message.answer("✅ Баннер удалён.", reply_markup=admin_menu_kb())
+
+    saved = None
+    if message.animation:
+        saved = f"anim|{message.animation.file_id}"
+    elif message.video:
+        saved = f"video|{message.video.file_id}"
+    elif message.photo:
+        file_id = message.photo[-1].file_id
+        saved = f"photo|{file_id}"
+    else:
+        return await message.answer("❌ Пожалуйста, отправьте фото, GIF-анимацию или видео (или /remove).")
+
     data = await state.get_data()
     suffix = data.get("banner_suffix")
-    # Сохраняем баннер локально
-    saved = await download_and_save_photo(bot, file_id, 0, 0)
     if suffix:
         await db.set_setting(f"btn:banner:{suffix}", saved)
     else:
         await db.set_setting("btn:banner", saved)
-    await state.clear()
-    await message.answer("✅ Баннер сохранён.", reply_markup=admin_menu_kb())
 
-
-@router.message(BannerUpload.photo, Command("remove"))
-async def adm_btn_banner_remove(message: Message, db: Database, state: FSMContext):
-    data = await state.get_data()
-    suffix = data.get("banner_suffix")
-    if suffix:
-        await db.delete_setting(f"btn:banner:{suffix}")
-    else:
-        await db.delete_setting("btn:banner")
     await state.clear()
-    await message.answer("✅ Баннер удалён.", reply_markup=admin_menu_kb())
+    media_type = "GIF-анимация" if "anim|" in saved else ("Видео" if "video|" in saved else "Фото")
+    await message.answer(f"✅ Баннер ({media_type}) успешно сохранён!", reply_markup=admin_menu_kb())
 
 
 # --- товары ---
@@ -407,6 +679,10 @@ class ProdAdd(StatesGroup):
 
 class ProdEdit(StatesGroup):
     value = State()
+
+
+class ProdStock(StatesGroup):
+    stock = State()
 
 
 class ProdItems(StatesGroup):
@@ -489,7 +765,11 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
         [InlineKeyboardButton(text="👁 Просмотр как пользователь", callback_data=f"adm:prod_preview:{pid}")],
     ]
     if p["kind"] == "oneoff":
-        rows.append([InlineKeyboardButton(text="➕ Добавить единицы", callback_data=f"adm:prod_items:{pid}")])
+        # Позволяет напрямую установить числовое количество на складе
+        rows.append([
+            InlineKeyboardButton(text="✏️ Количество", callback_data=f"adm:prod_stock:{pid}"),
+            InlineKeyboardButton(text="➕ Добавить единицы", callback_data=f"adm:prod_items:{pid}")
+        ])
     rows.append([InlineKeyboardButton(text="❌ Удалить товар", callback_data=f"adm:prod_del:{pid}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"adm:pcat:{p['category_id']}")])
     await cb.message.answer(
@@ -514,23 +794,28 @@ async def adm_prod_preview(cb: CallbackQuery, db: Database):
         return await cb.answer("Товар не найден", show_alert=True)
 
     from media import send_product_photos
-    try:
-        await send_product_photos(cb.message, db, pid)
-    except Exception:
-        pass
+    photos = await db.list_product_photos(pid)
+    file_ids = [ph["file_id"] for ph in photos]
+
+    stock = "многоразовый (∞)" if p["kind"] == "reusable" else f"{await db.stock(pid)} шт."
 
     buy_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"🛒 Купить — {texts.fmt_usd(p['price'])}", callback_data=f"buy:{pid}")],
         [InlineKeyboardButton(text="⬅️ К товару (адм)", callback_data=f"adm:prod:{pid}")],
     ])
-    await cb.message.answer(
+
+    caption = (
         f"📦 <b>{p['name']}</b>\n\n"
         f"{p['description']}\n\n"
-        f"💵 Цена: <b>{texts.fmt_usd(p['price'])}</b>\n\n"
-        f"<i>👆 Так видит товар пользователь</i>",
-        reply_markup=buy_markup,
-        parse_mode="HTML"
+        f"💵 Цена: <b>{texts.fmt_usd(p['price'])}</b>\n"
+        f"📦 В наличии: {stock}\n\n"
+        f"<i>👆 Так видит товар пользователь</i>"
     )
+
+    try:
+        await send_product_photos(cb.message, file_ids, caption, buy_markup)
+    except Exception:
+        await cb.message.answer(caption, reply_markup=buy_markup, parse_mode="HTML")
     await cb.answer()
 
 
@@ -638,11 +923,15 @@ async def adm_add_prod_items(message: Message, db: Database, state: FSMContext):
 
 @router.message(ProdAdd.photos, Command("done"))
 @router.message(ProdAdd.photos, Command("skip"))
-async def adm_add_prod_photos_done(message: Message, state: FSMContext):
+async def adm_add_prod_photos_done(message: Message, state: FSMContext, db: Database, config=None):
     data = await state.get_data()
+    pid = data.get("product_id")
     n = data.get("photos_added", 0)
     await state.clear()
     await message.answer(f"✅ Товар готов. Фото: {n}.", reply_markup=admin_menu_kb())
+    if pid and config:
+        from autopost import send_product_autopost
+        await send_product_autopost(message.bot, db, pid, config)
 
 
 @router.message(ProdAdd.photos)
@@ -693,6 +982,39 @@ async def adm_prod_edit_done(message: Message, db: Database, state: FSMContext):
     await db.set_product_field(data["product_id"], data["field"], value)
     await state.clear()
     await message.answer("✅ Сохранено.", reply_markup=admin_menu_kb())
+
+
+@router.callback_query(F.data.startswith("adm:prod_stock:"))
+async def adm_prod_stock(cb: CallbackQuery, state: FSMContext):
+    pid = int(cb.data.split(":")[2])
+    await state.set_state(ProdStock.stock)
+    await state.update_data(product_id=pid)
+    await cb.message.answer("Введите количество единиц на складе (целое неотрицательное число).\nЧтобы снять ручное значение, отправьте 'clear' или 'сброс'.")
+    await cb.answer()
+
+
+@router.message(ProdStock.stock)
+async def adm_prod_stock_done(message: Message, db: Database, state: FSMContext):
+    data = await state.get_data()
+    pid = data.get("product_id")
+    if not pid:
+        await state.clear()
+        return await message.answer("Что-то пошло не так. Попробуйте снова.", reply_markup=admin_menu_kb())
+    text = message.text.strip().lower()
+    if text in ("clear", "сброс", "удалить"):
+        await db.set_product_stock(pid, None)
+        await state.clear()
+        await message.answer("✅ Переопределение количества снято.", reply_markup=admin_menu_kb())
+        return
+    try:
+        count = int(message.text.strip())
+        if count < 0:
+            raise ValueError()
+    except ValueError:
+        return await message.answer("Нужно ввести неотрицательное целое число или 'clear'. Попробуйте ещё раз:")
+    await db.set_product_stock(pid, count)
+    await state.clear()
+    await message.answer(f"✅ Количество установлено: {count} шт.", reply_markup=admin_menu_kb())
 
 
 @router.callback_query(F.data.startswith("adm:prod_toggle:"))
@@ -1241,14 +1563,20 @@ async def adm_create_promo_process(message: Message, state: FSMContext, db: Data
 # 🎨  ДИЗАЙН КНОПОК ГЛАВНОГО МЕНЮ
 # ─────────────────────────────────────────────
 
-# Все кнопки главного меню: ключ -> (эмодзи, label, дефолтный текст)
+# Все кнопки: ключ -> (эмодзи, label, дефолтный текст)
 DESIGN_BUTTONS = [
-    ("search",   "🔍", "Поиск",    texts.BTN_SEARCH),
-    ("catalog",  "🛍️", "Каталог",  texts.BTN_CATALOG),
-    ("profile",  "👤", "Профиль",  texts.BTN_PROFILE),
-    ("history",  "📜", "История",  texts.BTN_HISTORY),
-    ("referral", "🤝", "Рефералка",texts.BTN_REFERRAL),
-    ("support",  "💬", "Поддержка",texts.BTN_SUPPORT),
+    ("search",       "💎", "Поиск",           texts.BTN_SEARCH),
+    ("catalog",      "💎", "Каталог",         texts.BTN_CATALOG),
+    ("profile",      "💎", "Профиль",         texts.BTN_PROFILE),
+    ("support",      "💎", "Поддержка",       texts.BTN_SUPPORT),
+    ("ads",          "💎", "Реклама",         "💎 Реклама"),
+    ("history",      "💎", "История",         texts.BTN_HISTORY),
+    ("referral",     "💎", "Рефералка",       texts.BTN_REFERRAL),
+    ("about",        "💎", "О магазине",      "💎 О магазине"),
+    ("reviews",      "💎", "Отзывы",          "💎 Отзывы"),
+    ("create_check", "💎", "Создать чек",     "💎 Создать чек"),
+    ("promocode",    "💎", "Промокод",        "💎 Промокод"),
+    ("more",         "💎", "Ещё",             "💎 Ещё"),
 ]
 
 
@@ -1260,14 +1588,22 @@ class LinkEditState(StatesGroup):
     waiting_url = State()
 
 
+class AutopostChannelState(StatesGroup):
+    waiting_channel = State()
+
+
 async def _build_btns_menu(db: Database) -> str:
     """Формирует текст с текущими значениями кнопок."""
-    lines = ["🎨 <b>Дизайн кнопок главного меню</b>\n"]
+    lines = ["🎨 <b>Дизайн кнопок и баннеров меню</b>\n"]
+    banner = await db.get_setting("btn:banner")
+    lines.append(f"🖼 <b>Глобальный баннер меню:</b> {'✅ Установлен' if banner else '❌ Не установлен'}\n")
     for key, emoji, label, default in DESIGN_BUTTONS:
         current = await db.get_setting(f"btn:{key}") or default
+        pb = await db.get_setting(f"btn:banner:{key}")
+        b_mark = " 🖼✅" if pb else ""
         changed = " ✏️" if current != default else ""
-        lines.append(f"{emoji} <b>{label}</b>{changed}\n└ <code>{current}</code>")
-    lines.append("\nНажмите на кнопку чтобы изменить её текст.")
+        lines.append(f"{emoji} <b>{label}</b>{changed}{b_mark}\n└ <code>{current}</code>")
+    lines.append("\n<i>Нажмите на кнопку чтобы изменить текст или баннер (фото/GIF/видео).</i>")
     return "\n".join(lines)
 
 
@@ -1275,23 +1611,39 @@ async def _build_btns_menu(db: Database) -> str:
 async def adm_btns(cb: CallbackQuery, db: Database):
     text = await _build_btns_menu(db)
     rows = []
+    
+    # Кнопка глобального баннера
+    gb = await db.get_setting("btn:banner")
+    gb_text = "🖼 Глобальный баннер: ✅ Изменить" if gb else "🖼 Глобальный баннер: ➕ Добавить"
+    rows.append([InlineKeyboardButton(text=gb_text, callback_data="adm:btn_banner")])
+    if gb:
+        rows.append([InlineKeyboardButton(text="🗑 Удалить глобальный баннер", callback_data="adm:btn_banner_del")])
+
+    # Кнопки для каждого раздела
     for key, emoji, label, default in DESIGN_BUTTONS:
         current = await db.get_setting(f"btn:{key}") or default
-        mark = " ✏️" if current != default else ""
-        rows.append([InlineKeyboardButton(
-            text=f"{emoji} {label}{mark}",
-            callback_data=f"adm:btn_edit:{key}"
-        )])
-    rows.append([InlineKeyboardButton(text="🔄 Сбросить всё к дефолту", callback_data="adm:btn_reset_all")])
-    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
-    await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+        pb = await db.get_setting(f"btn:banner:{key}")
+        b_status = "🖼✅" if pb else "🖼➕"
+        
+        rows.append([
+            InlineKeyboardButton(text=f"✏️ {emoji} {label}", callback_data=f"adm:btn_edit:{key}"),
+            InlineKeyboardButton(text=f"{b_status} Баннер", callback_data=f"adm:btn_banner:{key}")
+        ])
+
+    rows.append([InlineKeyboardButton(text="🔄 Сбросить все тексты к дефолту", callback_data="adm:btn_reset_all")])
+    rows.append([InlineKeyboardButton(text="⬅️ Админ-меню", callback_data="adm:menu")])
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith("adm:btn_edit:"))
 async def adm_btn_edit(cb: CallbackQuery, db: Database, state: FSMContext):
     key = cb.data.split(":")[2]
-    # Ищем метаданные кнопки
     meta = next((b for b in DESIGN_BUTTONS if b[0] == key), None)
     if not meta:
         return await cb.answer("Кнопка не найдена", show_alert=True)
@@ -1330,16 +1682,13 @@ async def adm_btn_edit_save(message: Message, db: Database, state: FSMContext):
 
     new_text = message.text.strip()
     if len(new_text) > 128:
-        await message.answer("❌ Текст кнопки слишком длинный (максимум 128 символов). Попробуйте ещё раз:")
-        return
+        return await message.answer("❌ Текст кнопки слишком длинный (максимум 128 символов). Попробуйте ещё раз:")
     if not new_text:
-        await message.answer("❌ Текст не может быть пустым. Попробуйте ещё раз:")
-        return
+        return await message.answer("❌ Текст не может быть пустым. Попробуйте ещё раз:")
 
     await db.set_setting(f"btn:{key}", new_text)
     await state.clear()
 
-    # Показываем превью
     rows = [[InlineKeyboardButton(text=new_text, callback_data="noop")]]
     rows.append([InlineKeyboardButton(text="⬅️ К кнопкам", callback_data="adm:btns")])
     await message.answer(
@@ -1378,17 +1727,7 @@ async def adm_btn_reset_all(cb: CallbackQuery, db: Database):
     for key, _, _, default in DESIGN_BUTTONS:
         await db.set_setting(f"btn:{key}", default)
     await cb.answer("✅ Все кнопки сброшены к дефолту!", show_alert=True)
-    # Обновляем сообщение
-    text = await _build_btns_menu(db)
-    rows = []
-    for key, emoji, label, default in DESIGN_BUTTONS:
-        rows.append([InlineKeyboardButton(text=f"{emoji} {label}", callback_data=f"adm:btn_edit:{key}")])
-    rows.append([InlineKeyboardButton(text="🔄 Сбросить всё к дефолту", callback_data="adm:btn_reset_all")])
-    rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
-    try:
-        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
-    except Exception:
-        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await adm_btns(cb, db)
 
 
 # ─────────────────────────────────────────────
@@ -1396,8 +1735,10 @@ async def adm_btn_reset_all(cb: CallbackQuery, db: Database):
 # ─────────────────────────────────────────────
 
 DESIGN_LINKS = [
-    ("support_url",  "💬", "Поддержка (ссылка)", "https://t.me/"),
-    ("channel_url",  "📢", "Канал магазина",      "https://t.me/news_glock_shop"),
+    ("support_url",        "💬", "Поддержка (основная)",      "https://t.me/"),
+    ("support_backup_url", "🆘", "Резервная поддержка (бот)", "https://t.me/glock_admin_bot"),
+    ("channel_url",        "📢", "Канал магазина",            "https://t.me/news_glock_shop"),
+    ("our_projects_url",   "❇️", "Наши проекты (ссылка)",     "https://t.me/"),
 ]
 
 
@@ -1461,8 +1802,7 @@ async def adm_link_edit_save(message: Message, db: Database, state: FSMContext):
 
     url = message.text.strip()
     if not (url.startswith("https://") or url.startswith("http://")):
-        await message.answer("❌ Ссылка должна начинаться с <code>https://</code>. Попробуйте ещё раз:", parse_mode="HTML")
-        return
+        return await message.answer("❌ Ссылка должна начинаться с <code>https://</code>. Попробуйте ещё раз:", parse_mode="HTML")
 
     await db.set_setting(f"link:{key}", url)
     await state.clear()
@@ -1495,4 +1835,133 @@ async def adm_link_reset(cb: CallbackQuery, db: Database, state: FSMContext):
         ])
     )
     await cb.answer("✅ Сброшено!")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 📢  АВТОПОСТИНГ ОБНОВЛЕНИЙ В КАНАЛ
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "adm:autopost")
+async def adm_autopost_menu(cb: CallbackQuery, db: Database, config=None):
+    enabled = await db.get_setting("autopost:enabled") != "0"
+    channel = await db.get_setting("autopost:channel_id") or (str(config.update_channel_id) if config else "-1004437922263")
+    status_emoji = "🟢 Включен" if enabled else "🔴 Выключен"
+    toggle_text = "🔴 Выключить" if enabled else "🟢 Включить"
+
+    text = (
+        "📢 <b>Управление автопостингом обновлений в канал</b>\n\n"
+        f"Статус: <b>{status_emoji}</b>\n"
+        f"Канал для постов: <code>{channel}</code>\n\n"
+        "<i>При добавлении нового товара бот автоматически отправляет красивый пост с фото, описанием, ценой и кнопкой быстрой покупки в этот канал!</i>"
+    )
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{toggle_text} автопостинг", callback_data="adm:autopost_toggle")],
+        [InlineKeyboardButton(text="✏️ Изменить канал", callback_data="adm:autopost_set_channel")],
+        [InlineKeyboardButton(text="🚀 Отправить тестовый пост", callback_data="adm:autopost_test")],
+        [InlineKeyboardButton(text="⬅️ Админ-меню", callback_data="adm:menu")]
+    ])
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:autopost_toggle")
+async def adm_autopost_toggle(cb: CallbackQuery, db: Database, config=None):
+    current = await db.get_setting("autopost:enabled") != "0"
+    new_val = "0" if current else "1"
+    await db.set_setting("autopost:enabled", new_val)
+    status_str = "включен" if new_val == "1" else "выключен"
+    await cb.answer(f"Автопостинг {status_str}!")
+    await adm_autopost_menu(cb, db, config)
+
+
+@router.callback_query(F.data == "adm:autopost_set_channel")
+async def adm_autopost_set_channel(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AutopostChannelState.waiting_channel)
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:autopost")]
+    ])
+    await cb.message.answer(
+        "✏️ Отправьте <b>ID канала</b> (например: <code>-1004437922263</code>) или <b>юзернейм канала</b> (например: <code>@my_channel</code>):\n\n"
+        "<i>⚠️ Убедитесь, что бот добавлен администратором в этот канал с правом публикации сообщений!</i>",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@router.message(AutopostChannelState.waiting_channel, F.text)
+async def adm_autopost_channel_save(message: Message, db: Database, state: FSMContext):
+    ch = message.text.strip()
+    if not ch:
+        return await message.answer("❌ Введите ID или юзернейм канала:")
+
+    await db.set_setting("autopost:channel_id", ch)
+    await state.clear()
+    await message.answer(f"✅ Канал автопостинга сохранён: <code>{ch}</code>", parse_mode="HTML", reply_markup=admin_menu_kb())
+
+
+@router.callback_query(F.data == "adm:autopost_test")
+async def adm_autopost_test(cb: CallbackQuery, bot: Bot, db: Database, config=None):
+    # Ищем любой последний активный товар для теста
+    cur = await db.conn.execute("SELECT id FROM products WHERE visible = 1 ORDER BY id DESC LIMIT 1")
+    row = await cur.fetchone()
+    if not row:
+        return await cb.answer("В магазине нет активных товаров для теста", show_alert=True)
+
+    from autopost import send_product_autopost
+    ok = await send_product_autopost(bot, db, row["id"], config)
+    if ok:
+        await cb.answer("✅ Тестовый пост успешно отправлен в канал!", show_alert=True)
+    else:
+        await cb.answer("❌ Ошибка отправки! Проверьте, что бот админ в канале и ID указан верно.", show_alert=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🌴  РЕКЛАМА И БРОНИ (ADS ADMIN)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.callback_query(F.data == "adm:ads")
+async def adm_ads_menu(cb: CallbackQuery, db: Database):
+    ads = await db.list_all_ads(limit=30)
+    lines = ["🌴 <b>Заказы рекламы и рассылок</b>\n"]
+    rows = []
+    if not ads:
+        lines.append("<i>Пока нет активных заявок или броней рекламы.</i>")
+    else:
+        for ad in ads:
+            atype = ad["ad_type"]
+            status = "🟢" if ad["status"] == "active" else ("🟡" if ad["status"] == "pending" else "⚪")
+            if atype == "mailing":
+                lines.append(f"{status} 📨 <b>Рассылка #{ad['id']}:</b> {ad['slot_date']} {ad['slot_time']} (от @{ad['username'] or ad['user_id']}) — {texts.fmt_usd(ad['price_cents'])}")
+            elif atype == "button":
+                lines.append(f"{status} 🔘 <b>Кнопка #{ad['id']}:</b> «{ad['button_title']}» ({ad['days']} дн., до {ad['expires_at']})")
+            elif atype == "welcome":
+                lines.append(f"{status} 👋 <b>Приветствие #{ad['id']}:</b> ({ad['days']} дн., до {ad['expires_at']})")
+            rows.append([InlineKeyboardButton(text=f"🗑 Удалить слот #{ad['id']} ({ad['ad_type']})", callback_data=f"adm:ad_del:{ad['id']}")])
+
+    rows.append([InlineKeyboardButton(text="⬅️ Админ-меню", callback_data="adm:menu")])
+    text = "\n".join(lines)
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    try:
+        await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:ad_del:"))
+async def adm_ad_del(cb: CallbackQuery, db: Database):
+    slot_id = int(cb.data.split(":")[2])
+    await db.delete_ad_slot(slot_id)
+    await cb.answer("Рекламный слот удалён!")
+    await adm_ads_menu(cb, db)
+
+
+
+
+
 

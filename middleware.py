@@ -69,31 +69,37 @@ class UpsertUserMiddleware(BaseMiddleware):
             )
 
             if not is_check_cb and not is_start_cmd and bot:
+                # Собираем список каналов для проверки (зеркало — свой канал, главный бот — настраиваемые)
                 if mirror:
-                    # Зеркало: проверяем канал зеркала (если задан)
-                    ch_username = mirror["channel_username"] if mirror["channel_username"] else None
-                    ch_link = mirror["channel_link"] if mirror["channel_link"] else None
+                    channels = [mirror["channel_username"]] if mirror.get("channel_username") else []
+                    is_mirror = True
                 else:
-                    # Главный бот: жёстко проверяем @news_glock_shop
-                    ch_username = MAIN_CHANNEL_USERNAME
-                    ch_link = MAIN_CHANNEL_LINK
+                    val = await db.get_setting("subscribe:required_channels")
+                    if val:
+                        channels = [c.strip().lstrip("@") for c in val.split(",") if c.strip()]
+                    else:
+                        channels = [MAIN_CHANNEL_USERNAME] if MAIN_CHANNEL_USERNAME else []
+                    is_mirror = False
 
-                if ch_username and ch_link:
+                if channels:
                     try:
-                        member = await bot.get_chat_member(f"@{ch_username}", user.id)
-                        is_subscribed = member.status in ("member", "administrator", "creator")
+                        is_subscribed = True
+                        for ch in channels:
+                            member = await bot.get_chat_member(f"@{ch}", user.id)
+                            if member.status not in ("member", "administrator", "creator"):
+                                is_subscribed = False
+                                break
                     except Exception:
                         is_subscribed = True  # При ошибке API не блокируем
 
                     if not is_subscribed:
-                        markup = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="📢 Подписаться на канал", url=ch_link)],
-                            [InlineKeyboardButton(text="✅ Я подписался",
-                                                  callback_data="check_subscription" if not mirror else "check_mirror_subscription")],
-                        ])
+                        rows = [[InlineKeyboardButton(text=f"📢 Подписаться @{ch}", url=f"https://t.me/{ch}")] for ch in channels]
+                        rows.append([InlineKeyboardButton(text="✅ Я подписался",
+                                                          callback_data="check_mirror_subscription" if is_mirror else "check_subscription")])
+                        markup = InlineKeyboardMarkup(inline_keyboard=rows)
                         text = (
                             f"📢 <b>Для доступа к боту необходима подписка!</b>\n\n"
-                            f"🔗 Подпишитесь на наш канал и нажмите кнопку ниже:"
+                            f"🔗 Подпишитесь на канал(ы) и нажмите кнопку ниже:"
                         )
                         if isinstance(event, Message):
                             await event.answer(text, reply_markup=markup, parse_mode="HTML")

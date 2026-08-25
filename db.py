@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    username TEXT,
+    role TEXT NOT NULL DEFAULT 'product',
+    permissions TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -25,7 +34,8 @@ CREATE TABLE IF NOT EXISTS products (
     kind TEXT NOT NULL CHECK (kind IN ('oneoff', 'reusable')),
     content_type TEXT,
     content_value TEXT,
-    visible INTEGER NOT NULL DEFAULT 1
+    visible INTEGER NOT NULL DEFAULT 1,
+    stock_override INTEGER DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS product_items (
@@ -145,6 +155,29 @@ CREATE TABLE IF NOT EXISTS mirror_users (
     PRIMARY KEY (user_id, mirror_id)
 );
 
+CREATE TABLE IF NOT EXISTS purchase_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    title TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS required_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    title TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS about_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT,
+    title TEXT,
+    url TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS withdrawal_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mirror_id INTEGER NOT NULL REFERENCES mirrors(id) ON DELETE CASCADE,
@@ -214,12 +247,77 @@ class Database:
         await self.conn.execute("PRAGMA foreign_keys = ON")
         await self.conn.executescript(SCHEMA)
         await self.conn.commit()
-        # Миграция: добавляем колонку currency, если её нет (не ломаем существующую БД)
+        # Миграция: добавляем колонку currency и stock_override, если их нет (не ломаем существующую БД)
         try:
             await self.conn.execute("ALTER TABLE users ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'")
             await self.conn.commit()
         except Exception:
-            # Если колонка уже есть или другой ошибка - игнорируем
+            # Если колонка уже есть или другая ошибка - игнорируем
+            pass
+        try:
+            await self.conn.execute("ALTER TABLE products ADD COLUMN stock_override INTEGER DEFAULT NULL")
+            await self.conn.commit()
+        except Exception:
+            pass
+        # Миграция: создаём таблицы витрины и о магазине если нет (для старых БД)
+        try:
+            await self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS showcase_categories "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+                "emoji TEXT NOT NULL DEFAULT '🗂', position INTEGER NOT NULL DEFAULT 0, "
+                "is_active INTEGER NOT NULL DEFAULT 1, "
+                "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+            )
+            await self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS showcase_items "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "category_id INTEGER NOT NULL REFERENCES showcase_categories(id) ON DELETE CASCADE, "
+                "name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
+                "photo_file_id TEXT, position INTEGER NOT NULL DEFAULT 0, "
+                "is_active INTEGER NOT NULL DEFAULT 1, "
+                "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+            )
+            await self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS about_channels ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "username TEXT, title TEXT, url TEXT, "
+                "position INTEGER NOT NULL DEFAULT 0, "
+                "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+            )
+            await self.conn.commit()
+        except Exception:
+            pass
+
+        # Миграция: добавляем колонку provider в invoices если её нет
+        try:
+            await self.conn.execute("ALTER TABLE invoices ADD COLUMN provider TEXT NOT NULL DEFAULT 'cryptopay'")
+            await self.conn.commit()
+        except Exception:
+            pass
+
+        # Миграция: создаём таблицу ads_slots для рекламы и рассылок
+        try:
+            await self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS ads_slots ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "ad_type TEXT NOT NULL, "
+                "slot_date TEXT, "
+                "slot_time TEXT, "
+                "days INTEGER DEFAULT 1, "
+                "price_cents INTEGER NOT NULL, "
+                "has_button INTEGER DEFAULT 0, "
+                "user_id INTEGER NOT NULL, "
+                "username TEXT, "
+                "text_content TEXT NOT NULL, "
+                "photo_file_id TEXT, "
+                "button_title TEXT, "
+                "button_url TEXT, "
+                "status TEXT NOT NULL DEFAULT 'active', "
+                "expires_at TEXT, "
+                "created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+            )
+            await self.conn.commit()
+        except Exception:
             pass
 
     async def close(self) -> None:
@@ -261,6 +359,88 @@ class Database:
         )
         await self.conn.commit()
         return await self.get_user(user_id)
+
+    # --- администраторы ---
+
+    async def add_admin(self, user_id: int | None, username: str | None, role: str = 'product') -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO admins (user_id, username, role) VALUES (?, ?, ?)",
+            (user_id, username, role),
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def get_admin(self, user_id: int | None = None, username: str | None = None):
+        if user_id:
+            cur = await self.conn.execute("SELECT * FROM admins WHERE user_id = ?", (user_id,))
+            row = await cur.fetchone()
+            if row:
+                return row
+        if username:
+            uname = username.lstrip("@").lower()
+            cur = await self.conn.execute("SELECT * FROM admins WHERE lower(username) = ?", (uname,))
+            row = await cur.fetchone()
+            if row:
+                return row
+        return None
+
+    async def list_admins(self) -> list:
+        cur = await self.conn.execute("SELECT * FROM admins ORDER BY id")
+        return await cur.fetchall()
+
+    async def remove_admin_by_id(self, admin_id: int) -> None:
+        await self.conn.execute("DELETE FROM admins WHERE id = ?", (admin_id,))
+        await self.conn.commit()
+
+    async def set_admin_role_by_id(self, admin_id: int, role: str) -> None:
+        await self.conn.execute("UPDATE admins SET role = ? WHERE id = ?", (role, admin_id))
+        await self.conn.commit()
+
+    async def is_admin(self, user_id: int | None, username: str | None = None) -> bool:
+        a = await self.get_admin(user_id=user_id, username=username)
+        return bool(a)
+
+    # --- каналы обязательной подписки ---
+
+    async def list_purchase_channels(self) -> list:
+        cur = await self.conn.execute("SELECT * FROM purchase_channels ORDER BY id")
+        return await cur.fetchall()
+
+    async def add_purchase_channel(self, username: str, title: str | None = None) -> int | None:
+        uname = username.lstrip("@")
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO purchase_channels (username, title) VALUES (?, ?)",
+            (uname, title),
+        )
+        await self.conn.commit()
+        cur = await self.conn.execute("SELECT id FROM purchase_channels WHERE username = ?", (uname,))
+        row = await cur.fetchone()
+        return row["id"] if row else None
+
+    async def remove_purchase_channel(self, channel_id: int) -> None:
+        await self.conn.execute("DELETE FROM purchase_channels WHERE id = ?", (channel_id,))
+        await self.conn.commit()
+
+    # --- обязательные каналы для использования бота ---
+
+    async def list_required_channels(self) -> list:
+        cur = await self.conn.execute("SELECT * FROM required_channels ORDER BY id")
+        return await cur.fetchall()
+
+    async def add_required_channel(self, username: str, title: str | None = None) -> int | None:
+        uname = username.lstrip("@")
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO required_channels (username, title) VALUES (?, ?)",
+            (uname, title),
+        )
+        await self.conn.commit()
+        cur = await self.conn.execute("SELECT id FROM required_channels WHERE username = ?", (uname,))
+        row = await cur.fetchone()
+        return row["id"] if row else None
+
+    async def remove_required_channel(self, channel_id: int) -> None:
+        await self.conn.execute("DELETE FROM required_channels WHERE id = ?", (channel_id,))
+        await self.conn.commit()
 
     async def set_user_currency(self, user_id: int, currency: str) -> None:
         if currency not in ('USD', 'RUB'):
@@ -372,6 +552,22 @@ class Database:
         await self.conn.execute(f"UPDATE products SET {field} = ? WHERE id = ?", (value, product_id))
         await self.conn.commit()
 
+    async def set_product_stock(self, product_id: int, count: int | None) -> None:
+        """Установить количество единиц товара вручную. Если count is None, снимаем переопределение.
+        Подходит для одноразовых (oneoff) товаров.
+        """
+        if count is not None:
+            try:
+                c = int(count)
+            except Exception:
+                raise ValueError("count должен быть целым числом или None")
+            if c < 0:
+                raise ValueError("count не может быть отрицательным")
+            await self.conn.execute("UPDATE products SET stock_override = ? WHERE id = ?", (c, product_id))
+        else:
+            await self.conn.execute("UPDATE products SET stock_override = NULL WHERE id = ?", (product_id,))
+        await self.conn.commit()
+
     async def set_product_content(self, product_id: int, content_type: str, content_value: str) -> None:
         await self.conn.execute(
             "UPDATE products SET content_type = ?, content_value = ? WHERE id = ?",
@@ -425,6 +621,15 @@ class Database:
     # --- единицы одноразовых товаров ---
 
     async def stock(self, product_id: int) -> int:
+        # Если у товара задано явное количество (stock_override) — используем его.
+        cur = await self.conn.execute("SELECT stock_override FROM products WHERE id = ?", (product_id,))
+        row = await cur.fetchone()
+        if row and row["stock_override"] is not None:
+            try:
+                return int(row["stock_override"])
+            except Exception:
+                pass
+        # По-умолчанию считаем свободные единицы в таблице product_items
         cur = await self.conn.execute(
             "SELECT COUNT(*) FROM product_items WHERE product_id = ? AND status = 'free'", (product_id,))
         return (await cur.fetchone())[0]
@@ -524,11 +729,12 @@ class Database:
     # --- счета ---
 
     async def create_invoice(self, invoice_id: int, user_id: int, purpose: str, amount: int,
-                             pay_url: str, product_id: int | None = None, item_id: int | None = None) -> None:
+                             pay_url: str, product_id: int | None = None, item_id: int | None = None,
+                             provider: str = "cryptopay") -> None:
         await self.conn.execute(
-            "INSERT INTO invoices (invoice_id, user_id, purpose, product_id, item_id, amount, pay_url) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (invoice_id, user_id, purpose, product_id, item_id, amount, pay_url),
+            "INSERT INTO invoices (invoice_id, user_id, purpose, product_id, item_id, amount, pay_url, provider) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (invoice_id, user_id, purpose, product_id, item_id, amount, pay_url, provider),
         )
         await self.conn.commit()
 
@@ -594,14 +800,22 @@ class Database:
             cur = await self.conn.execute(sql)
             return (await cur.fetchone())[0]
 
-        users = await one("SELECT COUNT(*) FROM users")
+        real_users = await one("SELECT COUNT(*) FROM users")
+        offset_str = await self.get_setting("stats:user_offset")
+        default_offset = 6612
+        try:
+            user_offset = int(offset_str) if offset_str is not None else default_offset
+        except ValueError:
+            user_offset = default_offset
+        users = real_users + user_offset
+
         sales = await one("SELECT COUNT(*) FROM purchases")
         revenue = await one("SELECT COALESCE(SUM(price), 0) FROM purchases")
         cur = await self.conn.execute(
             "SELECT product_name, COUNT(*) AS c FROM purchases "
             "GROUP BY product_name ORDER BY c DESC LIMIT 5")
         top = await cur.fetchall()
-        return {"users": users, "sales": sales, "revenue": revenue, "top": top}
+        return {"users": users, "real_users": real_users, "sales": sales, "revenue": revenue, "top": top}
 
     # --- логи ---
 
@@ -1041,4 +1255,189 @@ class Database:
     async def list_container_history(self, user_id: int, limit: int = 20):
         cur = await self.conn.execute("SELECT * FROM container_history WHERE user_id = ? ORDER BY id DESC LIMIT ?", (user_id, limit))
         return await cur.fetchall()
+
+    # --- Витрина (showcase) ---
+
+    async def showcase_get_categories(self, only_active: bool = True):
+        q = "SELECT * FROM showcase_categories"
+        if only_active:
+            q += " WHERE is_active = 1"
+        q += " ORDER BY position, id"
+        cur = await self.conn.execute(q)
+        return await cur.fetchall()
+
+    async def showcase_get_category(self, cat_id: int):
+        cur = await self.conn.execute("SELECT * FROM showcase_categories WHERE id = ?", (cat_id,))
+        return await cur.fetchone()
+
+    async def showcase_add_category(self, name: str, emoji: str = '🗂') -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO showcase_categories (name, emoji) VALUES (?, ?)", (name, emoji)
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def showcase_delete_category(self, cat_id: int) -> None:
+        await self.conn.execute("DELETE FROM showcase_categories WHERE id = ?", (cat_id,))
+        await self.conn.commit()
+
+    async def showcase_toggle_category(self, cat_id: int) -> bool:
+        cur = await self.conn.execute("SELECT is_active FROM showcase_categories WHERE id = ?", (cat_id,))
+        row = await cur.fetchone()
+        if not row:
+            return False
+        new_val = 0 if row["is_active"] else 1
+        await self.conn.execute("UPDATE showcase_categories SET is_active = ? WHERE id = ?", (new_val, cat_id))
+        await self.conn.commit()
+        return bool(new_val)
+
+    async def showcase_get_items(self, cat_id: int, only_active: bool = True):
+        q = "SELECT * FROM showcase_items WHERE category_id = ?"
+        if only_active:
+            q += " AND is_active = 1"
+        q += " ORDER BY position, id"
+        cur = await self.conn.execute(q, (cat_id,))
+        return await cur.fetchall()
+
+    async def showcase_get_item(self, item_id: int):
+        cur = await self.conn.execute("SELECT * FROM showcase_items WHERE id = ?", (item_id,))
+        return await cur.fetchone()
+
+    async def showcase_add_item(self, cat_id: int, name: str, description: str, photo_file_id: str | None = None) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO showcase_items (category_id, name, description, photo_file_id) VALUES (?, ?, ?, ?)",
+            (cat_id, name, description, photo_file_id)
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def showcase_delete_item(self, item_id: int) -> None:
+        await self.conn.execute("DELETE FROM showcase_items WHERE id = ?", (item_id,))
+        await self.conn.commit()
+
+    async def showcase_toggle_item(self, item_id: int) -> bool:
+        cur = await self.conn.execute("SELECT is_active FROM showcase_items WHERE id = ?", (item_id,))
+        row = await cur.fetchone()
+        if not row:
+            return False
+        new_val = 0 if row["is_active"] else 1
+        await self.conn.execute("UPDATE showcase_items SET is_active = ? WHERE id = ?", (new_val, item_id))
+        await self.conn.commit()
+        return bool(new_val)
+
+    # --- О Магазине / О проекте (About Channels & Projects) ---
+
+    async def list_about_channels(self):
+        cur = await self.conn.execute("SELECT * FROM about_channels ORDER BY position, id")
+        return await cur.fetchall()
+
+    async def add_about_channel(self, username: str | None = None, title: str | None = None, url: str | None = None) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO about_channels (username, title, url) VALUES (?, ?, ?)",
+            (username, title, url)
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def remove_about_channel(self, channel_id: int) -> None:
+        await self.conn.execute("DELETE FROM about_channels WHERE id = ?", (channel_id,))
+        await self.conn.commit()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # РЕКЛАМА И РАССЫЛКИ (ADS & MAILINGS)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def get_booked_mailing_slots(self, slot_date: str) -> list[str]:
+        """Возвращает список занятых временных слотов (например ['13:00', '19:00']) на дату."""
+        cur = await self.conn.execute(
+            "SELECT slot_time FROM ads_slots WHERE ad_type = 'mailing' AND slot_date = ? AND status IN ('pending', 'active')",
+            (slot_date,)
+        )
+        rows = await cur.fetchall()
+        return [r["slot_time"] for r in rows if r["slot_time"]]
+
+    async def add_ad_slot(
+        self,
+        ad_type: str,
+        user_id: int,
+        username: str | None,
+        text_content: str,
+        price_cents: int,
+        slot_date: str | None = None,
+        slot_time: str | None = None,
+        days: int = 1,
+        has_button: bool = False,
+        photo_file_id: str | None = None,
+        button_title: str | None = None,
+        button_url: str | None = None,
+        status: str = "active",
+        expires_at: str | None = None,
+    ) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO ads_slots ("
+            "ad_type, user_id, username, text_content, price_cents, "
+            "slot_date, slot_time, days, has_button, photo_file_id, "
+            "button_title, button_url, status, expires_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ad_type, user_id, username, text_content, price_cents,
+                slot_date, slot_time, days, 1 if has_button else 0, photo_file_id,
+                button_title, button_url, status, expires_at
+            )
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def get_active_ad_buttons(self) -> list[dict]:
+        """Возвращает список активных кнопок рекламы (кнопки в разделе рекламы)."""
+        await self.expire_old_ads()
+        cur = await self.conn.execute(
+            "SELECT * FROM ads_slots WHERE ad_type = 'button' AND status = 'active' "
+            "AND (expires_at IS NULL OR expires_at > datetime('now')) "
+            "ORDER BY id DESC"
+        )
+        return await cur.fetchall()
+
+    async def get_active_welcome_ad(self) -> dict | None:
+        """Возвращает текущую активную рекламу в приветствии (/start)."""
+        await self.expire_old_ads()
+        cur = await self.conn.execute(
+            "SELECT * FROM ads_slots WHERE ad_type = 'welcome' AND status = 'active' "
+            "AND (expires_at IS NULL OR expires_at > datetime('now')) "
+            "ORDER BY id DESC LIMIT 1"
+        )
+        return await cur.fetchone()
+
+    async def get_due_mailings(self) -> list[dict]:
+        """Возвращает рассылки, чьё время отправки наступило."""
+        # slot_date <= date('now') and slot_time <= time('now', 'localtime')
+        cur = await self.conn.execute(
+            "SELECT * FROM ads_slots WHERE ad_type = 'mailing' AND status = 'active' "
+            "AND slot_date IS NOT NULL AND slot_time IS NOT NULL"
+        )
+        return await cur.fetchall()
+
+    async def mark_ad_completed(self, slot_id: int) -> None:
+        await self.conn.execute("UPDATE ads_slots SET status = 'completed' WHERE id = ?", (slot_id,))
+        await self.conn.commit()
+
+    async def expire_old_ads(self) -> None:
+        """Деактивирует рекламные слоты с истекшим сроком."""
+        await self.conn.execute(
+            "UPDATE ads_slots SET status = 'completed' "
+            "WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= datetime('now')"
+        )
+        await self.conn.commit()
+
+    async def list_all_ads(self, limit: int = 50) -> list[dict]:
+        cur = await self.conn.execute(
+            "SELECT * FROM ads_slots ORDER BY id DESC LIMIT ?", (limit,)
+        )
+        return await cur.fetchall()
+
+    async def delete_ad_slot(self, slot_id: int) -> None:
+        await self.conn.execute("DELETE FROM ads_slots WHERE id = ?", (slot_id,))
+        await self.conn.commit()
+
+
 

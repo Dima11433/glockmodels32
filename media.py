@@ -183,14 +183,107 @@ async def send_product_photos(message: Message, file_ids: list, caption: str, ma
             await message.answer(caption, reply_markup=markup, parse_mode=parse_mode)
 
 
+async def send_media_item(message: Message, media_val: str, caption: str, markup=None, parse_mode: str = "HTML") -> bool:
+    """Универсальная и отказоустойчивая отправка любого медиа (GIF/анимация, видео, фото, локальный файл)."""
+    if not media_val or not str(media_val).strip():
+        return False
+
+    cap = caption[:1024] if len(caption) > 1024 else caption
+    media_str = str(media_val).strip()
+
+    # Очищаем возможный ошибочный двойной префикс file_id:anim| -> anim|
+    if media_str.startswith("file_id:"):
+        media_str = media_str[8:]
+
+    # 1. Формат anim|file_id (GIF анимация)
+    if media_str.startswith("anim|"):
+        fid = media_str.split("|", 1)[1]
+        try:
+            await message.answer_animation(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+            return True
+        except Exception:
+            try:
+                await message.answer_video(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+                return True
+            except Exception:
+                pass
+
+    # 2. Формат video|file_id (Видео)
+    if media_str.startswith("video|"):
+        fid = media_str.split("|", 1)[1]
+        try:
+            await message.answer_video(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+            return True
+        except Exception:
+            try:
+                await message.answer_animation(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+                return True
+            except Exception:
+                pass
+
+    # 3. Формат photo|file_id (Фото)
+    if media_str.startswith("photo|"):
+        fid = media_str.split("|", 1)[1]
+        try:
+            await message.answer_photo(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+            return True
+        except Exception:
+            pass
+
+    # 4. Локальный путь к файлу (если файл существует)
+    local = get_photo_local_path(media_str)
+    if local and local.exists():
+        ext = local.suffix.lower()
+        if ext in (".gif",):
+            try:
+                await message.answer_animation(FSInputFile(str(local)), caption=cap, reply_markup=markup, parse_mode=parse_mode)
+                return True
+            except Exception:
+                pass
+        elif ext in (".mp4", ".mov", ".webm", ".avi", ".mkv"):
+            try:
+                await message.answer_video(FSInputFile(str(local)), caption=cap, reply_markup=markup, parse_mode=parse_mode)
+                return True
+            except Exception:
+                pass
+        else:
+            try:
+                await message.answer_photo(FSInputFile(str(local)), caption=cap, reply_markup=markup, parse_mode=parse_mode)
+                return True
+            except Exception:
+                pass
+
+    # 5. Fallback: пробуем отправить как анимацию, затем фото, затем видео
+    fid = media_str
+    try:
+        await message.answer_animation(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+        return True
+    except Exception:
+        pass
+
+    try:
+        await message.answer_photo(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+        return True
+    except Exception:
+        pass
+
+    try:
+        await message.answer_video(fid, caption=cap, reply_markup=markup, parse_mode=parse_mode)
+        return True
+    except Exception:
+        pass
+
+    return False
+
+
 async def send_tab(message: Message, db: Database, video_key: str, text: str, markup=None, banner_suffix: str | None = None, parse_mode: str = "HTML") -> None:
     """Send a tab: prefer video (video_key). If no video, show banner for banner_suffix (btn:banner:<suffix>),
     then fallback to global btn:banner, then plaintext."""
     media = await db.get_setting(video_key)
     if media:
         try:
-            await send_media(message, media, text, markup, parse_mode=parse_mode)
-            return
+            if await send_media_item(message, media, text, markup, parse_mode=parse_mode):
+                return
         except Exception:
             pass
 
@@ -200,14 +293,8 @@ async def send_tab(message: Message, db: Database, video_key: str, text: str, ma
         banner = await db.get_setting(banner_key)
         if banner:
             try:
-                caption = text[:1024] if len(text) > 1024 else text
-                local = get_photo_local_path(banner)
-                if local:
-                    await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup, parse_mode=parse_mode)
-                else:
-                    fid = banner[8:] if banner.startswith("file_id:") else banner
-                    await message.answer_photo(fid, caption=caption, reply_markup=markup, parse_mode=parse_mode)
-                return
+                if await send_media_item(message, banner, text, markup, parse_mode=parse_mode):
+                    return
             except Exception:
                 pass
 
@@ -215,14 +302,8 @@ async def send_tab(message: Message, db: Database, video_key: str, text: str, ma
     banner = await db.get_setting("btn:banner")
     if banner:
         try:
-            caption = text[:1024] if len(text) > 1024 else text
-            local = get_photo_local_path(banner)
-            if local:
-                await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup, parse_mode=parse_mode)
-            else:
-                fid = banner[8:] if banner.startswith("file_id:") else banner
-                await message.answer_photo(fid, caption=caption, reply_markup=markup, parse_mode=parse_mode)
-            return
+            if await send_media_item(message, banner, text, markup, parse_mode=parse_mode):
+                return
         except Exception:
             pass
 
@@ -253,13 +334,8 @@ async def send_menu(message: Message, db: Database, text: str, markup=None, pars
     banner = await db.get_setting("btn:banner")
     if banner:
         try:
-            local = get_photo_local_path(banner)
-            if local:
-                await message.answer_photo(FSInputFile(str(local)), caption=caption, reply_markup=markup, parse_mode=parse_mode)
+            if await send_media_item(message, banner, caption, markup, parse_mode=parse_mode):
                 return
-            fid = banner[8:] if banner.startswith("file_id:") else banner
-            await message.answer_photo(fid, caption=caption, reply_markup=markup, parse_mode=parse_mode)
-            return
         except Exception:
             pass
 

@@ -198,11 +198,26 @@ async def support(cb: CallbackQuery, db: Database, state: FSMContext):
 @router.callback_query(F.data == "menu:about")
 async def menu_about(cb: CallbackQuery, db: Database, state: FSMContext):
     await state.clear()
-    full_text = texts.ABOUT_PROJECT + "\n\n━━━━━━━━━━━━━━━━━━━━━━━\n" + texts.FAQ_TEXT
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support")],
-        [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main")],
-    ])
+    full_text = texts.ABOUT_PROJECT
+    # Добавляем каналы, если они заданы
+    val = await db.get_setting("about:channels") or ""
+    channels = [c for c in val.split(",") if c.strip()]
+    if channels:
+        ch_lines = ["\n\n🔗 Наши каналы:"]
+        ch_buttons = []
+        for ch in channels:
+            ch_lines.append(f"• @{ch}")
+            ch_buttons.append([InlineKeyboardButton(text=f"@{ch}", url=f"https://t.me/{ch}")])
+        full_text += "\n" + "\n".join(ch_lines)
+    full_text += "\n\n━━━━━━━━━━━━━━━━━━━━━━━\n" + texts.FAQ_TEXT
+
+    # Кнопки: каналы (если есть), поддержка, назад
+    markup_rows = []
+    if channels:
+        markup_rows.extend(ch_buttons)
+    markup_rows.append([InlineKeyboardButton(text="💬 Поддержка", callback_data="menu:support")])
+    markup_rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main")])
+    markup = InlineKeyboardMarkup(inline_keyboard=markup_rows)
     await cb.message.answer(full_text, reply_markup=markup, parse_mode="Markdown")
     await cb.answer()
 

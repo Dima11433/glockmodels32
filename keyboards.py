@@ -19,13 +19,15 @@ async def main_menu(db: Database | None = None) -> InlineKeyboardMarkup:
     s_catalog = await g("catalog", texts.BTN_CATALOG)
     s_profile = await g("profile", texts.BTN_PROFILE)
     s_support = await g("support", texts.BTN_SUPPORT)
+    s_ads = await g("ads", "🌴 Реклама")
+    s_more = await g("more", "⚙️ Ещё")
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=s_search, callback_data="menu:search"),
          InlineKeyboardButton(text=s_catalog, callback_data="menu:catalog")],
         [InlineKeyboardButton(text=s_profile, callback_data="menu:profile"),
          InlineKeyboardButton(text=s_support, callback_data="menu:support")],
-        [InlineKeyboardButton(text="⚙️ Ещё", callback_data="menu:more")],
+        [InlineKeyboardButton(text=s_more, callback_data="menu:more")],
     ])
 
 
@@ -51,14 +53,20 @@ def pagination_keyboard(current_page: int, total_pages: int, callback_prefix: st
     return InlineKeyboardMarkup(inline_keyboard=[buttons, [InlineKeyboardButton(text="⬅️ Меню", callback_data="menu:main")]])
 
 
-# List of main menu buttons (suffix, title) used elsewhere for descriptions
+# List of main menu buttons (suffix, title) used for design customization
 MAIN_BUTTONS = [
     ("search", texts.BTN_SEARCH),
     ("catalog", texts.BTN_CATALOG),
     ("profile", texts.BTN_PROFILE),
+    ("support", texts.BTN_SUPPORT),
+    ("ads", "💎 Реклама"),
     ("history", texts.BTN_HISTORY),
     ("referral", texts.BTN_REFERRAL),
-    ("support", texts.BTN_SUPPORT),
+    ("about", "💎 О Магазине"),
+    ("reviews", "💎 Отзывы"),
+    ("create_check", "💎 Создать чек"),
+    ("promocode", "💎 Промокод"),
+    ("more", "💎 Ещё"),
 ]
 
 ITEMS_PER_PAGE = 6

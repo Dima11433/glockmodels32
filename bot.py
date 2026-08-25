@@ -6,16 +6,62 @@ import sys
 # Гарантируем, что текущая директория бота добавлена в sys.path для импорта handlers
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import datetime
 from aiogram import Bot, Dispatcher
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from config import load_config
 from db import Database
-from handlers import admin, buy, checks_promos
-from handlers import user_basic
+from handlers import admin, ads, buy, checks_promos, user_basic
 from handlers.buy import notify_payment_result
 from middleware import UpsertUserMiddleware
 from payments import Payments, apply_paid_invoice
 import photo_manager
+
+
+async def ads_scheduler(bot: Bot, db: Database) -> None:
+    """Фоновая задача: рассылка забронированных постов и снятие истекших кнопок."""
+    while True:
+        try:
+            now = datetime.datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            time_str = now.strftime("%H:%M")
+
+            # Деактивируем истекшие слоты
+            await db.expire_old_ads()
+
+            # Проверяем рассылки
+            due = await db.get_due_mailings()
+            for ad in due:
+                if ad["slot_date"] == today_str and ad["slot_time"] <= time_str:
+                    logging.info(f"🚀 Запуск автоматической рассылки #{ad['id']}...")
+                    
+                    cur = await db.conn.execute("SELECT id FROM users")
+                    users = await cur.fetchall()
+
+                    markup = None
+                    if ad["has_button"] and ad["button_title"] and ad["button_url"]:
+                        markup = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text=ad["button_title"], url=ad["button_url"])]
+                        ])
+
+                    sent = 0
+                    for u in users:
+                        try:
+                            if ad["photo_file_id"]:
+                                await bot.send_photo(chat_id=u["id"], photo=ad["photo_file_id"], caption=ad["text_content"], reply_markup=markup, parse_mode="HTML")
+                            else:
+                                await bot.send_message(chat_id=u["id"], text=ad["text_content"], reply_markup=markup, parse_mode="HTML")
+                            sent += 1
+                            await asyncio.sleep(0.05)
+                        except Exception:
+                            pass
+                    
+                    await db.mark_ad_completed(ad["id"])
+                    logging.info(f"✅ Рассылка #{ad['id']} завершена! Доставлено: {sent}/{len(users)}")
+        except Exception:
+            logging.exception("Ошибка в ads_scheduler")
+        await asyncio.sleep(30)
 
 
 async def invoice_watcher(bot: Bot, db: Database, payments: Payments, config) -> None:
@@ -25,7 +71,7 @@ async def invoice_watcher(bot: Bot, db: Database, payments: Payments, config) ->
             if payments.enabled:
                 active = await db.list_active_invoices()
                 if active:
-                    statuses = await payments.get_statuses([r["invoice_id"] for r in active])
+                    statuses = await payments.get_statuses(active)
                     for row in active:
                         status = statuses.get(row["invoice_id"])
                         if status == "paid":
@@ -65,7 +111,7 @@ async def main() -> None:
     db_path = os.getenv("DB_PATH", "shop.db")
     db = Database(db_path)
     await db.connect()
-    payments = Payments(config.cryptopay_token, config.cryptopay_testnet)
+    payments = Payments(config.cryptopay_token, config.cryptopay_testnet, config.xrocket_api_key)
     main_bot = Bot(config.bot_token)
     dp = Dispatcher()
     dp["db"] = db
@@ -75,14 +121,15 @@ async def main() -> None:
     dp.message.outer_middleware(UpsertUserMiddleware())
     dp.callback_query.outer_middleware(UpsertUserMiddleware())
     
-    # ОСНОВНОЙ БОТ: базовая функциональность + чеки + промо + мини приложение (БЕЗ ЗЕРКАЛ)
-    dp.include_routers(admin.router, checks_promos.router, buy.router, user_basic.router)
+    # ОСНОВНОЙ БОТ: базовая функциональность + реклама + чеки + промо + покупки + админка
+    dp.include_routers(admin.router, checks_promos.router, ads.router, buy.router, user_basic.router)
 
-    # Запускаем миграцию фото в фоне (чтобы не блокировать старт бота)
+    # Запускаем миграцию фото и планировщики в фоне
     try:
         asyncio.create_task(photo_manager.migrate_photos(main_bot, db))
+        asyncio.create_task(ads_scheduler(main_bot, db))
     except Exception:
-        logging.exception("Failed to start photo migration")
+        logging.exception("Failed to start background tasks")
 
     await start_dummy_webserver()
     watcher = asyncio.create_task(invoice_watcher(main_bot, db, payments, config))
