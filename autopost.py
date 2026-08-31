@@ -24,7 +24,7 @@ async def send_product_autopost(bot: Bot, db: Database, product_id: int, config)
         bot_username = bot_user.username or config.bot_username
 
         # Текст поста
-        desc = p["description"].strip() if p.get("description") else ""
+        desc = p["description"].strip() if ("description" in p.keys() and p["description"]) else ""
         desc_block = f"\n\n📝 <b>Описание:</b>\n{desc}" if desc else ""
         
         caption = (

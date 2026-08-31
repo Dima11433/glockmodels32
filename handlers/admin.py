@@ -449,11 +449,11 @@ async def adm_cat(cb: CallbackQuery, db: Database):
     
     subcats = await db.list_subcategories(cat_id)
     prods_count = await db.count_products(cat_id)
-    video = "есть ✅" if cat.get("video_file_id") else "нет"
+    video = "есть ✅" if ("video_file_id" in cat.keys() and cat["video_file_id"]) else "нет"
 
     title_chain = f"📁 {cat['name']}"
     back_target = "adm:cats"
-    if cat.get("parent_id"):
+    if "parent_id" in cat.keys() and cat["parent_id"]:
         parent = await db.get_category(cat["parent_id"])
         if parent:
             title_chain = f"📁 {parent['name']} ➔ 📂 {cat['name']}"
@@ -473,7 +473,7 @@ async def adm_cat(cb: CallbackQuery, db: Database):
         InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:cat_rename:{cat_id}"),
         InlineKeyboardButton(text="🎬 Видео/баннер", callback_data=f"adm:cat_video:{cat_id}")
     ])
-    if cat.get("video_file_id"):
+    if "video_file_id" in cat.keys() and cat["video_file_id"]:
         rows.append([InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"adm:cat_video_del:{cat_id}")])
     rows.append([InlineKeyboardButton(text="❌ Удалить этот раздел", callback_data=f"adm:cat_del:{cat_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_target)])
@@ -659,7 +659,7 @@ async def adm_cat_video_done(message: Message, db: Database, state: FSMContext):
 async def adm_cat_del_yes(cb: CallbackQuery, db: Database):
     cat_id = int(cb.data.split(":")[2])
     cat = await db.get_category(cat_id)
-    parent_id = cat.get("parent_id") if cat else None
+    parent_id = cat["parent_id"] if (cat and "parent_id" in cat.keys()) else None
     await db.delete_category(cat_id)
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📂 К разделам", callback_data=f"adm:cat:{parent_id}" if parent_id else "adm:cats")]

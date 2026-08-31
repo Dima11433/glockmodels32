@@ -281,7 +281,7 @@ async def open_category(cb: CallbackQuery, db: Database, state: FSMContext):
         rows.append(pagination_buttons)
     
     # Кнопка возврата: к родителю или в главный каталог
-    if cat.get("parent_id"):
+    if "parent_id" in cat.keys() and cat["parent_id"]:
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cat:{cat['parent_id']}:0")])
     else:
         rows.append([InlineKeyboardButton(text="⬅️ Каталог", callback_data="menu:catalog")])
@@ -297,7 +297,7 @@ async def open_category(cb: CallbackQuery, db: Database, state: FSMContext):
         text = f"📁 <b>{cat['name']}</b>\n\nЗдесь пока нет товаров или подразделов."
 
     markup = InlineKeyboardMarkup(inline_keyboard=rows)
-    if cat.get('video_file_id'):
+    if "video_file_id" in cat.keys() and cat["video_file_id"]:
         try:
             await send_media(cb.message, cat["video_file_id"], text, markup)
         except Exception:
