@@ -239,20 +239,30 @@ async def open_category(cb: CallbackQuery, db: Database, state: FSMContext):
         await cb.answer("Категория не найдена", show_alert=True)
         return
     
+    subcats = await db.list_subcategories(cat_id)
     prods = await db.list_products(cat_id)
     
+    rows = []
+    # Сначала выводим кнопки вложенных подразделов (если есть)
+    if subcats:
+        for sc in subcats:
+            sub_count = await db.count_products(sc["id"])
+            count_str = f" ({sub_count})" if sub_count else ""
+            rows.append([InlineKeyboardButton(text=f"📂 {sc['name']}{count_str}", callback_data=f"cat:{sc['id']}:0")])
+
     ITEMS_PER_PAGE = 6
-    total_pages = (len(prods) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    total_pages = (len(prods) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE if prods else 1
     
     if page < 0 or page >= total_pages:
         page = 0
     
     start_idx = page * ITEMS_PER_PAGE
     end_idx = start_idx + ITEMS_PER_PAGE
-    page_prods = prods[start_idx:end_idx]
+    page_prods = prods[start_idx:end_idx] if prods else []
     
-    rows = [[InlineKeyboardButton(text=f"{p['name']} — {texts.fmt_usd(p['price'])}",
-                                  callback_data=f"prod:{p['id']}")] for p in page_prods]
+    for p in page_prods:
+        rows.append([InlineKeyboardButton(text=f"📦 {p['name']} — {texts.fmt_usd(p['price'])}",
+                                          callback_data=f"prod:{p['id']}")])
     
     if total_pages > 1:
         pagination_buttons = []
@@ -270,18 +280,30 @@ async def open_category(cb: CallbackQuery, db: Database, state: FSMContext):
         
         rows.append(pagination_buttons)
     
-    rows.append([InlineKeyboardButton(text="⬅️ Каталог", callback_data="menu:catalog")])
+    # Кнопка возврата: к родителю или в главный каталог
+    if cat.get("parent_id"):
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cat:{cat['parent_id']}:0")])
+    else:
+        rows.append([InlineKeyboardButton(text="⬅️ Каталог", callback_data="menu:catalog")])
     rows.append(keyboards.menu_row())
     
-    text = f"📁 {cat['name']}\n\nВыберите товар ({len(page_prods)} из {len(prods)}):" if prods else f"📁 {cat['name']}\n\nЗдесь пока нет товаров."
+    if subcats and prods:
+        text = f"📁 <b>{cat['name']}</b>\n\nВыберите подраздел или товар:"
+    elif subcats:
+        text = f"📁 <b>{cat['name']}</b>\n\nВыберите подраздел ({len(subcats)}):"
+    elif prods:
+        text = f"📁 <b>{cat['name']}</b>\n\nВыберите товар ({len(page_prods)} из {len(prods)}):"
+    else:
+        text = f"📁 <b>{cat['name']}</b>\n\nЗдесь пока нет товаров или подразделов."
+
     markup = InlineKeyboardMarkup(inline_keyboard=rows)
-    if cat['video_file_id']:
+    if cat.get('video_file_id'):
         try:
             await send_media(cb.message, cat["video_file_id"], text, markup)
         except Exception:
-            await cb.message.answer(text, reply_markup=markup)
+            await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
     else:
-        await cb.message.answer(text, reply_markup=markup)
+        await cb.message.answer(text, reply_markup=markup, parse_mode="HTML")
     await cb.answer()
 
 
@@ -309,7 +331,7 @@ async def product_card(cb: CallbackQuery, db: Database):
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💳 Купить", callback_data=f"buynow:{prod_id}")],
             [InlineKeyboardButton(text="⭐ Отзывы", callback_data=f"reviews:{prod_id}")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:catalog")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cat:{prod['category_id']}:0")],
             keyboards.menu_row(),
         ])
         

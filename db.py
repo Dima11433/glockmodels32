@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    parent_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE CASCADE,
     video_file_id TEXT,
     position INTEGER NOT NULL DEFAULT 0
 );
@@ -288,6 +289,13 @@ class Database:
         except Exception:
             pass
 
+        # Миграция: добавляем колонку parent_id в categories для подкатегорий
+        try:
+            await self.conn.execute("ALTER TABLE categories ADD COLUMN parent_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE CASCADE")
+            await self.conn.commit()
+        except Exception:
+            pass
+
         # Миграция: добавляем колонку provider в invoices если её нет
         try:
             await self.conn.execute("ALTER TABLE invoices ADD COLUMN provider TEXT NOT NULL DEFAULT 'cryptopay'")
@@ -486,16 +494,62 @@ class Database:
         await self.conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         await self.conn.commit()
 
-    # --- разделы ---
+    # --- разделы и подкатегории ---
 
-    async def add_category(self, name: str) -> int:
-        cur = await self.conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+    async def add_category(self, name: str, parent_id: int | None = None) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO categories (name, parent_id) VALUES (?, ?)",
+            (name, parent_id),
+        )
         await self.conn.commit()
         return cur.lastrowid
 
-    async def list_categories(self):
+    async def list_categories(self, parent_id: int | None = None):
+        """Возвращает категории. По умолчанию (parent_id is None) возвращает только корневые категории."""
+        if parent_id is None:
+            cur = await self.conn.execute("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY position, id")
+        else:
+            cur = await self.conn.execute("SELECT * FROM categories WHERE parent_id = ? ORDER BY position, id", (parent_id,))
+        return await cur.fetchall()
+
+    async def list_all_categories_raw(self):
+        """Возвращает абсолютно все категории и подкатегории."""
         cur = await self.conn.execute("SELECT * FROM categories ORDER BY position, id")
         return await cur.fetchall()
+
+    async def list_subcategories(self, parent_id: int):
+        """Возвращает список подкатегорий внутри заданной категории."""
+        cur = await self.conn.execute("SELECT * FROM categories WHERE parent_id = ? ORDER BY position, id", (parent_id,))
+        return await cur.fetchall()
+
+    async def count_subcategories(self, category_id: int) -> int:
+        """Возвращает количество подкатегорий внутри заданной категории."""
+        cur = await self.conn.execute("SELECT COUNT(*) FROM categories WHERE parent_id = ?", (category_id,))
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+    async def list_all_categories_flat(self) -> list:
+        """Возвращает плоский список всех категорий и их подкатегорий с понятным оформлением для выбора."""
+        root_cats = await self.list_categories(parent_id=None)
+        result = []
+        for rc in root_cats:
+            result.append({
+                "id": rc["id"],
+                "name": rc["name"],
+                "display_name": f"📁 {rc['name']}",
+                "parent_id": None,
+                "is_subcategory": False
+            })
+            subcats = await self.list_subcategories(rc["id"])
+            for sc in subcats:
+                result.append({
+                    "id": sc["id"],
+                    "name": sc["name"],
+                    "display_name": f"  └ 📂 {sc['name']}",
+                    "parent_id": rc["id"],
+                    "is_subcategory": True
+                })
+        return result
 
     async def get_category(self, category_id: int):
         cur = await self.conn.execute("SELECT * FROM categories WHERE id = ?", (category_id,))
@@ -516,6 +570,11 @@ class Database:
     async def count_products(self, category_id: int) -> int:
         cur = await self.conn.execute("SELECT COUNT(*) FROM products WHERE category_id = ?", (category_id,))
         return (await cur.fetchone())[0]
+
+    async def move_product(self, product_id: int, new_category_id: int) -> None:
+        """Перемещает товар в другой раздел или подраздел."""
+        await self.conn.execute("UPDATE products SET category_id = ? WHERE id = ?", (new_category_id, product_id))
+        await self.conn.commit()
 
     # --- товары ---
 

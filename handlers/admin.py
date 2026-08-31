@@ -66,6 +66,11 @@ class CatAdd(StatesGroup):
     video = State()
 
 
+class SubCatAdd(StatesGroup):
+    name = State()
+    video = State()
+
+
 class CatRename(StatesGroup):
     name = State()
 
@@ -413,15 +418,25 @@ async def adm_menu_cb(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# --- разделы ---
+# --- разделы и подкатегории ---
 
 @router.callback_query(F.data == "adm:cats")
 async def adm_cats(cb: CallbackQuery, db: Database):
-    cats = await db.list_categories()
-    rows = [[InlineKeyboardButton(text=c["name"], callback_data=f"adm:cat:{c['id']}")] for c in cats]
-    rows.append([InlineKeyboardButton(text="➕ Добавить раздел", callback_data="adm:add_cat")])
+    cats = await db.list_categories(parent_id=None)
+    rows = []
+    for c in cats:
+        sub_n = await db.count_subcategories(c["id"])
+        prod_n = await db.count_products(c["id"])
+        info = []
+        if sub_n:
+            info.append(f"📂 {sub_n}")
+        if prod_n:
+            info.append(f"📦 {prod_n}")
+        info_str = f" ({', '.join(info)})" if info else ""
+        rows.append([InlineKeyboardButton(text=f"📁 {c['name']}{info_str}", callback_data=f"adm:cat:{c['id']}")])
+    rows.append([InlineKeyboardButton(text="➕ Создать главный раздел", callback_data="adm:add_cat")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
-    await cb.message.answer("📁 Разделы:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.message.answer("📁 <b>Управление разделами каталога:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await cb.answer()
 
 
@@ -431,23 +446,83 @@ async def adm_cat(cb: CallbackQuery, db: Database):
     cat = await db.get_category(cat_id)
     if not cat:
         return await cb.answer("Раздел не найден", show_alert=True)
-    video = "есть ✅" if cat["video_file_id"] else "нет"
+    
+    subcats = await db.list_subcategories(cat_id)
+    prods_count = await db.count_products(cat_id)
+    video = "есть ✅" if cat.get("video_file_id") else "нет"
+
+    title_chain = f"📁 {cat['name']}"
+    back_target = "adm:cats"
+    if cat.get("parent_id"):
+        parent = await db.get_category(cat["parent_id"])
+        if parent:
+            title_chain = f"📁 {parent['name']} ➔ 📂 {cat['name']}"
+            back_target = f"adm:cat:{cat['parent_id']}"
+
     rows = [
-        [InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:cat_rename:{cat_id}")],
-        [InlineKeyboardButton(text="🎬 Загрузить видео", callback_data=f"adm:cat_video:{cat_id}"),
-         InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"adm:cat_video_del:{cat_id}")],
-        [InlineKeyboardButton(text="❌ Удалить раздел", callback_data=f"adm:cat_del:{cat_id}")],
-        [InlineKeyboardButton(text="⬅️ Разделы", callback_data="adm:cats")],
+        [InlineKeyboardButton(text=f"➕ Создать подраздел внутри", callback_data=f"adm:add_subcat:{cat_id}")],
     ]
-    await cb.message.answer(f"📁 {cat['name']}\nВидео: {video}",
-                            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    if subcats:
+        rows.append([InlineKeyboardButton(text=f"📂 Подразделы ({len(subcats)})", callback_data=f"adm:subcats:{cat_id}")])
+    
+    rows.append([
+        InlineKeyboardButton(text=f"📦 Товары раздела ({prods_count})", callback_data=f"adm:pcat:{cat_id}"),
+        InlineKeyboardButton(text="➕ Добавить товар", callback_data=f"adm:add_prod:{cat_id}")
+    ])
+    rows.append([
+        InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:cat_rename:{cat_id}"),
+        InlineKeyboardButton(text="🎬 Видео/баннер", callback_data=f"adm:cat_video:{cat_id}")
+    ])
+    if cat.get("video_file_id"):
+        rows.append([InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"adm:cat_video_del:{cat_id}")])
+    rows.append([InlineKeyboardButton(text="❌ Удалить этот раздел", callback_data=f"adm:cat_del:{cat_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_target)])
+
+    text = (
+        f"<b>{title_chain}</b>\n\n"
+        f"📂 Вложенных подразделов: <b>{len(subcats)}</b>\n"
+        f"📦 Товаров в этом разделе: <b>{prods_count}</b>\n"
+        f"🎬 Видео/баннер: <b>{video}</b>"
+    )
+    await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:subcats:"))
+async def adm_subcats(cb: CallbackQuery, db: Database):
+    parent_id = int(cb.data.split(":")[2])
+    parent = await db.get_category(parent_id)
+    if not parent:
+        return await cb.answer("Раздел не найден", show_alert=True)
+    
+    subcats = await db.list_subcategories(parent_id)
+    rows = []
+    for sc in subcats:
+        sc_sub_n = await db.count_subcategories(sc["id"])
+        sc_prod_n = await db.count_products(sc["id"])
+        info = []
+        if sc_sub_n:
+            info.append(f"📂 {sc_sub_n}")
+        if sc_prod_n:
+            info.append(f"📦 {sc_prod_n}")
+        info_str = f" ({', '.join(info)})" if info else ""
+        rows.append([InlineKeyboardButton(text=f"📂 {sc['name']}{info_str}", callback_data=f"adm:cat:{sc['id']}")])
+    
+    rows.append([InlineKeyboardButton(text="➕ Создать подраздел", callback_data=f"adm:add_subcat:{parent_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в раздел", callback_data=f"adm:cat:{parent_id}")])
+    
+    await cb.message.answer(
+        f"📂 <b>Подразделы внутри «{parent['name']}»:</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML"
+    )
     await cb.answer()
 
 
 @router.callback_query(F.data == "adm:add_cat")
 async def adm_add_cat(cb: CallbackQuery, state: FSMContext):
     await state.set_state(CatAdd.name)
-    await cb.message.answer("Введите название раздела:")
+    await cb.message.answer("Введите название главного раздела:")
     await cb.answer()
 
 
@@ -456,27 +531,77 @@ async def adm_add_cat_name(message: Message, db: Database, state: FSMContext):
     name = message.text.strip()
     if not name:
         return await message.answer("Название не может быть пустым. Введите ещё раз:")
-    cat_id = await db.add_category(name)
+    cat_id = await db.add_category(name, parent_id=None)
     await state.update_data(cat_id=cat_id)
     await state.set_state(CatAdd.video)
-    await message.answer("Пришлите видео для раздела (до 5 секунд) или отправьте /skip:")
+    await message.answer("Пришлите видео/GIF для раздела (до 5 секунд) или отправьте /skip:")
 
 
 @router.message(CatAdd.video, Command("skip"))
 async def adm_add_cat_skip(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("✅ Раздел создан.", reply_markup=admin_menu_kb())
+    await message.answer("✅ Главный раздел создан.", reply_markup=admin_menu_kb())
 
 
 @router.message(CatAdd.video)
 async def adm_add_cat_video(message: Message, db: Database, state: FSMContext):
     media = media_of(message)
     if not media:
-        return await message.answer("Это не видео. Пришлите видео или /skip:")
+        return await message.answer("Это не медиа. Пришлите видео/GIF или /skip:")
     data = await state.get_data()
     await db.set_category_video(data["cat_id"], media)
     await state.clear()
-    await message.answer("✅ Раздел создан с видео.", reply_markup=admin_menu_kb())
+    await message.answer("✅ Главный раздел создан с видео.", reply_markup=admin_menu_kb())
+
+
+@router.callback_query(F.data.startswith("adm:add_subcat:"))
+async def adm_add_subcat(cb: CallbackQuery, state: FSMContext, db: Database):
+    parent_id = int(cb.data.split(":")[2])
+    parent = await db.get_category(parent_id)
+    parent_name = parent["name"] if parent else "раздела"
+    await state.set_state(SubCatAdd.name)
+    await state.update_data(parent_id=parent_id)
+    await cb.message.answer(f"Введите название нового подраздела внутри «<b>{parent_name}</b>»:", parse_mode="HTML")
+    await cb.answer()
+
+
+@router.message(SubCatAdd.name, F.text)
+async def adm_add_subcat_name(message: Message, db: Database, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        return await message.answer("Название не может быть пустым. Введите ещё раз:")
+    data = await state.get_data()
+    parent_id = data.get("parent_id")
+    cat_id = await db.add_category(name, parent_id=parent_id)
+    await state.update_data(cat_id=cat_id, parent_id=parent_id)
+    await state.set_state(SubCatAdd.video)
+    await message.answer("Пришлите видео/GIF для подраздела (до 5 секунд) или отправьте /skip:")
+
+
+@router.message(SubCatAdd.video, Command("skip"))
+async def adm_add_subcat_skip(message: Message, state: FSMContext):
+    data = await state.get_data()
+    parent_id = data.get("parent_id")
+    await state.clear()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К разделу", callback_data=f"adm:cat:{parent_id}")]
+    ]) if parent_id else admin_menu_kb()
+    await message.answer("✅ Подраздел успешно создан!", reply_markup=markup)
+
+
+@router.message(SubCatAdd.video)
+async def adm_add_subcat_video(message: Message, db: Database, state: FSMContext):
+    media = media_of(message)
+    if not media:
+        return await message.answer("Это не медиа. Пришлите видео/GIF или /skip:")
+    data = await state.get_data()
+    await db.set_category_video(data["cat_id"], media)
+    parent_id = data.get("parent_id")
+    await state.clear()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К разделу", callback_data=f"adm:cat:{parent_id}")]
+    ]) if parent_id else admin_menu_kb()
+    await message.answer("✅ Подраздел успешно создан с видео!", reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("adm:cat_rename:"))
@@ -490,22 +615,28 @@ async def adm_cat_rename(cb: CallbackQuery, state: FSMContext):
 @router.message(CatRename.name, F.text)
 async def adm_cat_rename_done(message: Message, db: Database, state: FSMContext):
     data = await state.get_data()
-    await db.rename_category(data["cat_id"], message.text.strip())
+    cat_id = data["cat_id"]
+    await db.rename_category(cat_id, message.text.strip())
     await state.clear()
-    await message.answer("✅ Переименовано.", reply_markup=admin_menu_kb())
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К разделу", callback_data=f"adm:cat:{cat_id}")]
+    ])
+    await message.answer("✅ Переименовано.", reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("adm:cat_video_del:"))
 async def adm_cat_video_del(cb: CallbackQuery, db: Database):
-    await db.set_category_video(int(cb.data.split(":")[2]), None)
+    cat_id = int(cb.data.split(":")[2])
+    await db.set_category_video(cat_id, None)
     await cb.answer("Видео удалено ✅")
+    await adm_cat(cb, db)
 
 
 @router.callback_query(F.data.startswith("adm:cat_video:"))
 async def adm_cat_video(cb: CallbackQuery, state: FSMContext):
     await state.set_state(CatVideo.video)
     await state.update_data(cat_id=int(cb.data.split(":")[2]))
-    await cb.message.answer("Пришлите видео для раздела (до 5 секунд):")
+    await cb.message.answer("Пришлите видео/GIF для раздела (до 5 секунд):")
     await cb.answer()
 
 
@@ -513,30 +644,46 @@ async def adm_cat_video(cb: CallbackQuery, state: FSMContext):
 async def adm_cat_video_done(message: Message, db: Database, state: FSMContext):
     media = media_of(message)
     if not media:
-        return await message.answer("Это не видео. Пришлите видео:")
+        return await message.answer("Это не медиа. Пришлите видео:")
     data = await state.get_data()
-    await db.set_category_video(data["cat_id"], media)
+    cat_id = data["cat_id"]
+    await db.set_category_video(cat_id, media)
     await state.clear()
-    await message.answer("✅ Видео обновлено.", reply_markup=admin_menu_kb())
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К разделу", callback_data=f"adm:cat:{cat_id}")]
+    ])
+    await message.answer("✅ Видео обновлено.", reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("adm:cat_del_yes:"))
 async def adm_cat_del_yes(cb: CallbackQuery, db: Database):
-    await db.delete_category(int(cb.data.split(":")[2]))
-    await cb.message.answer("🗑 Раздел удалён.", reply_markup=admin_menu_kb())
+    cat_id = int(cb.data.split(":")[2])
+    cat = await db.get_category(cat_id)
+    parent_id = cat.get("parent_id") if cat else None
+    await db.delete_category(cat_id)
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К разделам", callback_data=f"adm:cat:{parent_id}" if parent_id else "adm:cats")]
+    ])
+    await cb.message.answer("🗑 Раздел удалён.", reply_markup=markup)
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith("adm:cat_del:"))
 async def adm_cat_del(cb: CallbackQuery, db: Database):
     cat_id = int(cb.data.split(":")[2])
-    n = await db.count_products(cat_id)
-    warn = f"\n⚠️ В разделе {n} товар(ов) — они будут удалены вместе с ним!" if n else ""
+    n_prods = await db.count_products(cat_id)
+    n_sub = await db.count_subcategories(cat_id)
+    warns = []
+    if n_prods:
+        warns.append(f"📦 {n_prods} товар(ов)")
+    if n_sub:
+        warns.append(f"📂 {n_sub} подраздел(ов)")
+    warn_text = f"\n⚠️ Будет удалено: {', '.join(warns)}!" if warns else ""
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Да, удалить", callback_data=f"adm:cat_del_yes:{cat_id}")],
         [InlineKeyboardButton(text="⬅️ Отмена", callback_data=f"adm:cat:{cat_id}")],
     ])
-    await cb.message.answer(f"Удалить раздел?{warn}", reply_markup=markup)
+    await cb.message.answer(f"Удалить раздел?{warn_text}", reply_markup=markup)
     await cb.answer()
 
 
@@ -715,27 +862,33 @@ async def load_items(message: Message, db: Database, product_id: int) -> int:
 
 @router.callback_query(F.data == "adm:prods")
 async def adm_prods(cb: CallbackQuery, db: Database):
-    cats = await db.list_categories()
-    if not cats:
+    all_cats = await db.list_all_categories_flat()
+    if not all_cats:
         return await cb.answer("Сначала создайте раздел", show_alert=True)
-    rows = [[InlineKeyboardButton(text=c["name"], callback_data=f"adm:pcat:{c['id']}")] for c in cats]
+    rows = []
+    for c in all_cats:
+        prod_n = await db.count_products(c["id"])
+        count_str = f" ({prod_n} шт)" if prod_n else ""
+        rows.append([InlineKeyboardButton(text=f"{c['display_name']}{count_str}", callback_data=f"adm:pcat:{c['id']}")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
-    await cb.message.answer("📦 Выберите раздел:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.message.answer("📦 <b>Выберите раздел/подраздел для управления товарами:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await cb.answer()
 
 
 @router.callback_query(F.data.startswith("adm:pcat:"))
 async def adm_pcat(cb: CallbackQuery, db: Database):
     cat_id = int(cb.data.split(":")[2])
+    cat = await db.get_category(cat_id)
+    cat_name = cat["name"] if cat else "раздела"
     prods = await db.list_products(cat_id, visible_only=False)
     rows = []
     for p in prods:
         mark = "" if p["visible"] else " 🚫"
         rows.append([InlineKeyboardButton(text=f"{p['name']} — {texts.fmt_usd(p['price'])}{mark}",
                                           callback_data=f"adm:prod:{p['id']}")])
-    rows.append([InlineKeyboardButton(text="➕ Добавить товар", callback_data=f"adm:add_prod:{cat_id}")])
+    rows.append([InlineKeyboardButton(text="➕ Добавить товар сюда", callback_data=f"adm:add_prod:{cat_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Разделы", callback_data="adm:prods")])
-    await cb.message.answer("📦 Товары раздела:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.message.answer(f"📦 <b>Товары раздела «{cat_name}»:</b> ({len(prods)} шт)", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await cb.answer()
 
 
@@ -745,6 +898,10 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
     p = await db.get_product(pid)
     if not p:
         return await cb.answer("Товар не найден", show_alert=True)
+    
+    cat = await db.get_category(p["category_id"])
+    cat_name = cat["name"] if cat else "Неизвестный"
+    
     if p["kind"] == "oneoff":
         stock = f"склад: {await db.stock(pid)} шт."
     else:
@@ -762,6 +919,7 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
         [InlineKeyboardButton(text="✏️ Цена", callback_data=f"adm:prod_edit:{pid}:price"),
          InlineKeyboardButton(text="👁 Скрыть/показать", callback_data=f"adm:prod_toggle:{pid}")],
         [InlineKeyboardButton(text=f"📷 Фото ({photos_n})", callback_data=f"adm:prod_photos:{pid}")],
+        [InlineKeyboardButton(text="🔀 Переместить в другой раздел", callback_data=f"adm:prod_move:{pid}")],
         [InlineKeyboardButton(text="👁 Просмотр как пользователь", callback_data=f"adm:prod_preview:{pid}")],
     ]
     if p["kind"] == "oneoff":
@@ -774,6 +932,7 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"adm:pcat:{p['category_id']}")])
     await cb.message.answer(
         f"📦 <b>{p['name']}</b>\n"
+        f"📁 Раздел: <b>{cat_name}</b>\n"
         f"{p['description']}\n\n"
         f"💵 Цена: <b>{texts.fmt_usd(p['price'])}</b>\n"
         f"📷 Фото: {photos_n} | {stock}\n"
@@ -783,6 +942,50 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
         parse_mode="HTML"
     )
     await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:prod_move:"))
+async def adm_prod_move(cb: CallbackQuery, db: Database):
+    pid = int(cb.data.split(":")[2])
+    p = await db.get_product(pid)
+    if not p:
+        return await cb.answer("Товар не найден", show_alert=True)
+    
+    all_cats = await db.list_all_categories_flat()
+    rows = []
+    for c in all_cats:
+        if c["id"] == p["category_id"]:
+            rows.append([InlineKeyboardButton(text=f"{c['display_name']} (текущий ✅)", callback_data="noop")])
+        else:
+            rows.append([InlineKeyboardButton(text=f"{c['display_name']} ➔ Сюда", callback_data=f"adm:prod_move_to:{pid}:{c['id']}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к товару", callback_data=f"adm:prod:{pid}")])
+    
+    await cb.message.answer(
+        f"🔀 <b>Перемещение товара «{p['name']}»</b>\n\n"
+        "Выберите раздел или подраздел, куда хотите перенести этот товар:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:prod_move_to:"))
+async def adm_prod_move_to(cb: CallbackQuery, db: Database, bot: Bot):
+    parts = cb.data.split(":")
+    pid = int(parts[2])
+    new_cat_id = int(parts[3])
+    
+    p = await db.get_product(pid)
+    if not p:
+        return await cb.answer("Товар не найден", show_alert=True)
+    
+    new_cat = await db.get_category(new_cat_id)
+    if not new_cat:
+        return await cb.answer("Новый раздел не найден", show_alert=True)
+    
+    await db.move_product(pid, new_cat_id)
+    await cb.answer(f"✅ Товар перенесён в «{new_cat['name']}»!", show_alert=True)
+    await adm_prod(cb, db, bot)
 
 
 @router.callback_query(F.data.startswith("adm:prod_preview:"))
