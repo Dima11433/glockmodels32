@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
     parent_id INTEGER DEFAULT NULL REFERENCES categories(id) ON DELETE CASCADE,
     video_file_id TEXT,
     position INTEGER NOT NULL DEFAULT 0
@@ -296,6 +297,13 @@ class Database:
         except Exception:
             pass
 
+        # Миграция: добавляем колонку description в categories для описания разделов
+        try:
+            await self.conn.execute("ALTER TABLE categories ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            await self.conn.commit()
+        except Exception:
+            pass
+
         # Миграция: добавляем колонку provider в invoices если её нет
         try:
             await self.conn.execute("ALTER TABLE invoices ADD COLUMN provider TEXT NOT NULL DEFAULT 'cryptopay'")
@@ -496,10 +504,10 @@ class Database:
 
     # --- разделы и подкатегории ---
 
-    async def add_category(self, name: str, parent_id: int | None = None) -> int:
+    async def add_category(self, name: str, parent_id: int | None = None, description: str = "") -> int:
         cur = await self.conn.execute(
-            "INSERT INTO categories (name, parent_id) VALUES (?, ?)",
-            (name, parent_id),
+            "INSERT INTO categories (name, parent_id, description) VALUES (?, ?, ?)",
+            (name, parent_id, description),
         )
         await self.conn.commit()
         return cur.lastrowid
@@ -557,6 +565,10 @@ class Database:
 
     async def rename_category(self, category_id: int, name: str) -> None:
         await self.conn.execute("UPDATE categories SET name = ? WHERE id = ?", (name, category_id))
+        await self.conn.commit()
+
+    async def set_category_description(self, category_id: int, description: str) -> None:
+        await self.conn.execute("UPDATE categories SET description = ? WHERE id = ?", (description, category_id))
         await self.conn.commit()
 
     async def set_category_video(self, category_id: int, media: str | None) -> None:

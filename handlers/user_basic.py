@@ -287,14 +287,17 @@ async def open_category(cb: CallbackQuery, db: Database, state: FSMContext):
         rows.append([InlineKeyboardButton(text="⬅️ Каталог", callback_data="menu:catalog")])
     rows.append(keyboards.menu_row())
     
+    desc = cat["description"].strip() if ("description" in cat.keys() and cat["description"]) else ""
+    desc_block = f"\n\n📝 {desc}" if desc else ""
+
     if subcats and prods:
-        text = f"📁 <b>{cat['name']}</b>\n\nВыберите подраздел или товар:"
+        text = f"📁 <b>{cat['name']}</b>{desc_block}\n\nВыберите подраздел или товар:"
     elif subcats:
-        text = f"📁 <b>{cat['name']}</b>\n\nВыберите подраздел ({len(subcats)}):"
+        text = f"📁 <b>{cat['name']}</b>{desc_block}\n\nВыберите подраздел ({len(subcats)}):"
     elif prods:
-        text = f"📁 <b>{cat['name']}</b>\n\nВыберите товар ({len(page_prods)} из {len(prods)}):"
+        text = f"📁 <b>{cat['name']}</b>{desc_block}\n\nВыберите товар ({len(page_prods)} из {len(prods)}):"
     else:
-        text = f"📁 <b>{cat['name']}</b>\n\nЗдесь пока нет товаров или подразделов."
+        text = f"📁 <b>{cat['name']}</b>{desc_block}\n\nЗдесь пока нет товаров или подразделов."
 
     markup = InlineKeyboardMarkup(inline_keyboard=rows)
     if "video_file_id" in cat.keys() and cat["video_file_id"]:

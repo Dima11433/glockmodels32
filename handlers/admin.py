@@ -63,16 +63,22 @@ class BannerUpload(StatesGroup):
 
 class CatAdd(StatesGroup):
     name = State()
+    description = State()
     video = State()
 
 
 class SubCatAdd(StatesGroup):
     name = State()
+    description = State()
     video = State()
 
 
 class CatRename(StatesGroup):
     name = State()
+
+
+class CatDesc(StatesGroup):
+    description = State()
 
 
 class CatVideo(StatesGroup):
@@ -450,6 +456,8 @@ async def adm_cat(cb: CallbackQuery, db: Database):
     subcats = await db.list_subcategories(cat_id)
     prods_count = await db.count_products(cat_id)
     video = "есть ✅" if ("video_file_id" in cat.keys() and cat["video_file_id"]) else "нет"
+    desc = cat["description"] if ("description" in cat.keys() and cat["description"]) else ""
+    desc_display = f"\n📝 Описание: <b>{desc}</b>" if desc else "\n📝 Описание: <i>(не задано)</i>"
 
     title_chain = f"📁 {cat['name']}"
     back_target = "adm:cats"
@@ -470,16 +478,19 @@ async def adm_cat(cb: CallbackQuery, db: Database):
         InlineKeyboardButton(text="➕ Добавить товар", callback_data=f"adm:add_prod:{cat_id}")
     ])
     rows.append([
-        InlineKeyboardButton(text="✏️ Переименовать", callback_data=f"adm:cat_rename:{cat_id}"),
-        InlineKeyboardButton(text="🎬 Видео/баннер", callback_data=f"adm:cat_video:{cat_id}")
+        InlineKeyboardButton(text="✏️ Название", callback_data=f"adm:cat_rename:{cat_id}"),
+        InlineKeyboardButton(text="✏️ Описание", callback_data=f"adm:cat_desc:{cat_id}")
     ])
-    if "video_file_id" in cat.keys() and cat["video_file_id"]:
-        rows.append([InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"adm:cat_video_del:{cat_id}")])
+    rows.append([
+        InlineKeyboardButton(text="🎬 Видео/баннер", callback_data=f"adm:cat_video:{cat_id}"),
+        InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"adm:cat_video_del:{cat_id}")
+    ])
     rows.append([InlineKeyboardButton(text="❌ Удалить этот раздел", callback_data=f"adm:cat_del:{cat_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_target)])
 
     text = (
-        f"<b>{title_chain}</b>\n\n"
+        f"<b>{title_chain}</b>\n"
+        f"{desc_display}\n\n"
         f"📂 Вложенных подразделов: <b>{len(subcats)}</b>\n"
         f"📦 Товаров в этом разделе: <b>{prods_count}</b>\n"
         f"🎬 Видео/баннер: <b>{video}</b>"
@@ -531,7 +542,25 @@ async def adm_add_cat_name(message: Message, db: Database, state: FSMContext):
     name = message.text.strip()
     if not name:
         return await message.answer("Название не может быть пустым. Введите ещё раз:")
-    cat_id = await db.add_category(name, parent_id=None)
+    await state.update_data(cat_name=name)
+    await state.set_state(CatAdd.description)
+    await message.answer("📝 Введите описание раздела (или отправьте /skip, чтобы пропустить):")
+
+
+@router.message(CatAdd.description, Command("skip"))
+async def adm_add_cat_desc_skip(message: Message, db: Database, state: FSMContext):
+    data = await state.get_data()
+    cat_id = await db.add_category(data["cat_name"], parent_id=None, description="")
+    await state.update_data(cat_id=cat_id)
+    await state.set_state(CatAdd.video)
+    await message.answer("Пришлите видео/GIF для раздела (до 5 секунд) или отправьте /skip:")
+
+
+@router.message(CatAdd.description, F.text)
+async def adm_add_cat_desc(message: Message, db: Database, state: FSMContext):
+    desc = message.text.strip()
+    data = await state.get_data()
+    cat_id = await db.add_category(data["cat_name"], parent_id=None, description=desc)
     await state.update_data(cat_id=cat_id)
     await state.set_state(CatAdd.video)
     await message.answer("Пришлите видео/GIF для раздела (до 5 секунд) или отправьте /skip:")
@@ -570,9 +599,27 @@ async def adm_add_subcat_name(message: Message, db: Database, state: FSMContext)
     name = message.text.strip()
     if not name:
         return await message.answer("Название не может быть пустым. Введите ещё раз:")
+    await state.update_data(subcat_name=name)
+    await state.set_state(SubCatAdd.description)
+    await message.answer("📝 Введите описание подраздела (или отправьте /skip, чтобы пропустить):")
+
+
+@router.message(SubCatAdd.description, Command("skip"))
+async def adm_add_subcat_desc_skip(message: Message, db: Database, state: FSMContext):
     data = await state.get_data()
     parent_id = data.get("parent_id")
-    cat_id = await db.add_category(name, parent_id=parent_id)
+    cat_id = await db.add_category(data["subcat_name"], parent_id=parent_id, description="")
+    await state.update_data(cat_id=cat_id, parent_id=parent_id)
+    await state.set_state(SubCatAdd.video)
+    await message.answer("Пришлите видео/GIF для подраздела (до 5 секунд) или отправьте /skip:")
+
+
+@router.message(SubCatAdd.description, F.text)
+async def adm_add_subcat_desc(message: Message, db: Database, state: FSMContext):
+    desc = message.text.strip()
+    data = await state.get_data()
+    parent_id = data.get("parent_id")
+    cat_id = await db.add_category(data["subcat_name"], parent_id=parent_id, description=desc)
     await state.update_data(cat_id=cat_id, parent_id=parent_id)
     await state.set_state(SubCatAdd.video)
     await message.answer("Пришлите видео/GIF для подраздела (до 5 секунд) или отправьте /skip:")
@@ -622,6 +669,36 @@ async def adm_cat_rename_done(message: Message, db: Database, state: FSMContext)
         [InlineKeyboardButton(text="📂 К разделу", callback_data=f"adm:cat:{cat_id}")]
     ])
     await message.answer("✅ Переименовано.", reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("adm:cat_desc:"))
+async def adm_cat_desc(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(CatDesc.description)
+    await state.update_data(cat_id=int(cb.data.split(":")[2]))
+    await cb.message.answer(
+        "📝 Введите новое описание для раздела.\n"
+        "Чтобы очистить/удалить описание, отправьте <code>clear</code> или <code>/remove</code>:",
+        parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@router.message(CatDesc.description, F.text)
+async def adm_cat_desc_done(message: Message, db: Database, state: FSMContext):
+    data = await state.get_data()
+    cat_id = data["cat_id"]
+    text = message.text.strip()
+    if text.lower() in ("clear", "/remove", "удалить", "/skip", "-"):
+        text = ""
+    await db.set_category_description(cat_id, text)
+    await state.clear()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 К разделу", callback_data=f"adm:cat:{cat_id}")]
+    ])
+    if text:
+        await message.answer(f"✅ Описание раздела сохранено:\n\n{text}", reply_markup=markup)
+    else:
+        await message.answer("✅ Описание раздела удалено.", reply_markup=markup)
 
 
 @router.callback_query(F.data.startswith("adm:cat_video_del:"))
