@@ -964,7 +964,7 @@ async def adm_pcat(cb: CallbackQuery, db: Database):
     rows = []
     for p in prods:
         mark = "" if p["visible"] else " 🚫"
-        if "old_price" in p.keys() and p.get("old_price") and p["old_price"] > p["price"]:
+        if "old_price" in p.keys() and p["old_price"] is not None and p["old_price"] > p["price"]:
             disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
             price_str = f"<s>{texts.fmt_usd(p['old_price'])}</s> {texts.fmt_usd(p['price'])} 🔥 (-{disc_pct}%)"
         else:
@@ -999,7 +999,7 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
     me = await bot.get_me()
     product_link = f"https://t.me/{me.username}?start=prod_{pid}"
 
-    if "old_price" in p.keys() and p.get("old_price") and p["old_price"] > p["price"]:
+    if "old_price" in p.keys() and p["old_price"] is not None and p["old_price"] > p["price"]:
         disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
         price_disp = f"<s>{texts.fmt_usd(p['old_price'])}</s> <b>{texts.fmt_usd(p['price'])}</b> 🔥 <i>(-{disc_pct}%)</i>"
         has_disc = True
@@ -2427,7 +2427,7 @@ async def adm_price_prod_menu(cb: CallbackQuery, db: Database):
     if not p:
         return await cb.answer("Товар не найден", show_alert=True)
     
-    if "old_price" in p.keys() and p.get("old_price") and p["old_price"] > p["price"]:
+    if "old_price" in p.keys() and p["old_price"] is not None and p["old_price"] > p["price"]:
         disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
         price_line = f"💵 Цена: <s>{texts.fmt_usd(p['old_price'])}</s> <b>{texts.fmt_usd(p['price'])}</b> 🔥 (-{disc_pct}%)"
         has_disc = True
@@ -2537,7 +2537,7 @@ async def _handle_percent_selected(target_msg: Message, percent: float, state: F
     preview_lines = []
     for p in samples:
         cur_p = p["price"]
-        prev_old = p.get("old_price")
+        prev_old = p.get("old_price") if isinstance(p, dict) else (p["old_price"] if ("old_price" in p.keys() and p["old_price"] is not None) else None)
         base_p = prev_old if (op == "discount" and prev_old is not None and prev_old > cur_p) else cur_p
         if op == "discount":
             new_p = max(1, int(round(base_p * (1.0 - percent / 100.0))))
