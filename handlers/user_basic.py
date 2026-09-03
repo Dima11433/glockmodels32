@@ -261,7 +261,11 @@ async def open_category(cb: CallbackQuery, db: Database, state: FSMContext):
     page_prods = prods[start_idx:end_idx] if prods else []
     
     for p in page_prods:
-        rows.append([InlineKeyboardButton(text=f"📦 {p['name']} — {texts.fmt_usd(p['price'])}",
+        price_str = texts.fmt_usd(p['price'])
+        if "old_price" in p.keys() and p["old_price"] and p["old_price"] > p["price"]:
+            disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
+            price_str = f"{price_str} 🔥 (-{disc_pct}%)"
+        rows.append([InlineKeyboardButton(text=f"📦 {p['name']} — {price_str}",
                                           callback_data=f"prod:{p['id']}")])
     
     if total_pages > 1:
@@ -324,7 +328,11 @@ async def product_card(cb: CallbackQuery, db: Database):
             await cb.answer("Товар не найден", show_alert=True)
             return
         
-        lines = [f"📦 {prod['name']}", f"💵 Цена: {texts.fmt_usd(prod['price'])}"]
+        if "old_price" in prod.keys() and prod["old_price"] and prod["old_price"] > prod["price"]:
+            disc_pct = int(round((1 - prod["price"] / prod["old_price"]) * 100))
+            lines = [f"📦 {prod['name']}", f"💵 Цена: <s>{texts.fmt_usd(prod['old_price'])}</s> <b>{texts.fmt_usd(prod['price'])}</b> 🔥 <i>(-{disc_pct}%)</i>"]
+        else:
+            lines = [f"📦 {prod['name']}", f"💵 Цена: {texts.fmt_usd(prod['price'])}"]
         if prod['description']:
             desc = prod['description'][:500]  # Ограничиваем описание 500 символов
             if len(prod['description']) > 500:

@@ -108,6 +108,7 @@ def admin_menu_kb() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="📁 Разделы", callback_data="adm:cats")],
         [InlineKeyboardButton(text="📦 Товары", callback_data="adm:prods"),
          InlineKeyboardButton(text="📢 Автопостинг", callback_data="adm:autopost")],
+        [InlineKeyboardButton(text="🏷 Скидки & Наценки (%)", callback_data="adm:pricing")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="adm:users"),
          InlineKeyboardButton(text="📋 Логи", callback_data="adm:logs")],
         [InlineKeyboardButton(text="📨 Рассылка", callback_data="adm:mailing"),
@@ -942,13 +943,15 @@ async def adm_prods(cb: CallbackQuery, db: Database):
     all_cats = await db.list_all_categories_flat()
     if not all_cats:
         return await cb.answer("Сначала создайте раздел", show_alert=True)
-    rows = []
+    rows = [
+        [InlineKeyboardButton(text="🏷 Скидки & Наценки (%)", callback_data="adm:pricing")]
+    ]
     for c in all_cats:
         prod_n = await db.count_products(c["id"])
         count_str = f" ({prod_n} шт)" if prod_n else ""
         rows.append([InlineKeyboardButton(text=f"{c['display_name']}{count_str}", callback_data=f"adm:pcat:{c['id']}")])
     rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="adm:menu")])
-    await cb.message.answer("📦 <b>Выберите раздел/подраздел для управления товарами:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.message.answer("📦 <b>Выберите раздел/подраздел для управления товарами или настройте цены (%):</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     await cb.answer()
 
 
@@ -961,8 +964,14 @@ async def adm_pcat(cb: CallbackQuery, db: Database):
     rows = []
     for p in prods:
         mark = "" if p["visible"] else " 🚫"
-        rows.append([InlineKeyboardButton(text=f"{p['name']} — {texts.fmt_usd(p['price'])}{mark}",
+        if "old_price" in p.keys() and p.get("old_price") and p["old_price"] > p["price"]:
+            disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
+            price_str = f"<s>{texts.fmt_usd(p['old_price'])}</s> {texts.fmt_usd(p['price'])} 🔥 (-{disc_pct}%)"
+        else:
+            price_str = texts.fmt_usd(p['price'])
+        rows.append([InlineKeyboardButton(text=f"{p['name']} — {price_str}{mark}",
                                           callback_data=f"adm:prod:{p['id']}")])
+    rows.append([InlineKeyboardButton(text="🏷 Скидки / Наценки в разделе", callback_data=f"adm:price_cat:{cat_id}")])
     rows.append([InlineKeyboardButton(text="➕ Добавить товар сюда", callback_data=f"adm:add_prod:{cat_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Разделы", callback_data="adm:prods")])
     await cb.message.answer(f"📦 <b>Товары раздела «{cat_name}»:</b> ({len(prods)} шт)", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
@@ -990,15 +999,27 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
     me = await bot.get_me()
     product_link = f"https://t.me/{me.username}?start=prod_{pid}"
 
+    if "old_price" in p.keys() and p.get("old_price") and p["old_price"] > p["price"]:
+        disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
+        price_disp = f"<s>{texts.fmt_usd(p['old_price'])}</s> <b>{texts.fmt_usd(p['price'])}</b> 🔥 <i>(-{disc_pct}%)</i>"
+        has_disc = True
+    else:
+        price_disp = f"<b>{texts.fmt_usd(p['price'])}</b>"
+        has_disc = False
+
     rows = [
         [InlineKeyboardButton(text="✏️ Название", callback_data=f"adm:prod_edit:{pid}:name"),
          InlineKeyboardButton(text="✏️ Описание", callback_data=f"adm:prod_edit:{pid}:description")],
-        [InlineKeyboardButton(text="✏️ Цена", callback_data=f"adm:prod_edit:{pid}:price"),
+        [InlineKeyboardButton(text="✏️ Цена ($)", callback_data=f"adm:prod_edit:{pid}:price"),
          InlineKeyboardButton(text="👁 Скрыть/показать", callback_data=f"adm:prod_toggle:{pid}")],
+        [InlineKeyboardButton(text="📉 Скидка (%)", callback_data=f"adm:price_op:prod:{pid}:discount"),
+         InlineKeyboardButton(text="📈 Повысить (%)", callback_data=f"adm:price_op:prod:{pid}:markup")],
         [InlineKeyboardButton(text=f"📷 Фото ({photos_n})", callback_data=f"adm:prod_photos:{pid}")],
         [InlineKeyboardButton(text="🔀 Переместить в другой раздел", callback_data=f"adm:prod_move:{pid}")],
         [InlineKeyboardButton(text="👁 Просмотр как пользователь", callback_data=f"adm:prod_preview:{pid}")],
     ]
+    if has_disc:
+        rows.append([InlineKeyboardButton(text="🔄 Сбросить скидку (вернуть старую цену)", callback_data=f"adm:price_reset:prod:{pid}")])
     if p["kind"] == "oneoff":
         # Позволяет напрямую установить числовое количество на складе
         rows.append([
@@ -1011,7 +1032,7 @@ async def adm_prod(cb: CallbackQuery, db: Database, bot: Bot):
         f"📦 <b>{p['name']}</b>\n"
         f"📁 Раздел: <b>{cat_name}</b>\n"
         f"{p['description']}\n\n"
-        f"💵 Цена: <b>{texts.fmt_usd(p['price'])}</b>\n"
+        f"💵 Цена: {price_disp}\n"
         f"📷 Фото: {photos_n} | {stock}\n"
         f"Статус: {vis}\n\n"
         f"🔗 <b>Ссылка на товар:</b>\n<code>{product_link}</code>",
@@ -2239,6 +2260,416 @@ async def adm_ad_del(cb: CallbackQuery, db: Database):
     await db.delete_ad_slot(slot_id)
     await cb.answer("Рекламный слот удалён!")
     await adm_ads_menu(cb, db)
+
+
+# ─────────────────────────────────────────────────────────────
+# 🏷 УПРАВЛЕНИЕ ЦЕНАМИ И СКИДКАМИ (%)
+# ─────────────────────────────────────────────────────────────
+
+class AdminPricingState(StatesGroup):
+    waiting_for_percent = State()
+    waiting_for_confirm = State()
+
+
+def pricing_main_kb(total_count: int, discounted_count: int) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="🌍 На ВСЕ товары сразу", callback_data="adm:price_scope:all")],
+        [InlineKeyboardButton(text="📁 По разделам (категориям)", callback_data="adm:price_scope:cats")],
+        [InlineKeyboardButton(text="📦 По отдельному товару", callback_data="adm:price_scope:prods")],
+    ]
+    if discounted_count > 0:
+        rows.append([InlineKeyboardButton(text=f"🔄 Сбросить ВСЕ скидки ({discounted_count})", callback_data="adm:price_reset_all_confirm")])
+    rows.append([InlineKeyboardButton(text="⬅️ В админ-панель", callback_data="adm:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def percent_choice_kb(operation: str) -> InlineKeyboardMarkup:
+    if operation == "discount":
+        rows = [
+            [InlineKeyboardButton(text="-5%", callback_data="adm:price_val:5"),
+             InlineKeyboardButton(text="-10%", callback_data="adm:price_val:10"),
+             InlineKeyboardButton(text="-15%", callback_data="adm:price_val:15")],
+            [InlineKeyboardButton(text="-20%", callback_data="adm:price_val:20"),
+             InlineKeyboardButton(text="-25%", callback_data="adm:price_val:25"),
+             InlineKeyboardButton(text="-30%", callback_data="adm:price_val:30")],
+            [InlineKeyboardButton(text="-40%", callback_data="adm:price_val:40"),
+             InlineKeyboardButton(text="-50%", callback_data="adm:price_val:50"),
+             InlineKeyboardButton(text="-70%", callback_data="adm:price_val:70")],
+            [InlineKeyboardButton(text="⬅️ Отмена", callback_data="adm:pricing")]
+        ]
+    else:
+        rows = [
+            [InlineKeyboardButton(text="+5%", callback_data="adm:price_val:5"),
+             InlineKeyboardButton(text="+10%", callback_data="adm:price_val:10"),
+             InlineKeyboardButton(text="+15%", callback_data="adm:price_val:15")],
+            [InlineKeyboardButton(text="+20%", callback_data="adm:price_val:20"),
+             InlineKeyboardButton(text="+25%", callback_data="adm:price_val:25"),
+             InlineKeyboardButton(text="+30%", callback_data="adm:price_val:30")],
+            [InlineKeyboardButton(text="+40%", callback_data="adm:price_val:40"),
+             InlineKeyboardButton(text="+50%", callback_data="adm:price_val:50"),
+             InlineKeyboardButton(text="+100%", callback_data="adm:price_val:100")],
+            [InlineKeyboardButton(text="⬅️ Отмена", callback_data="adm:pricing")]
+        ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "adm:pricing")
+async def adm_pricing_menu(cb: CallbackQuery, state: FSMContext, db: Database):
+    """Главный экран управления скидками и наценками."""
+    await state.clear()
+    stats = await db.get_pricing_summary()
+    text = (
+        "🏷 <b>УПРАВЛЕНИЕ ЦЕНАМИ И СКИДКАМИ (%)</b>\n\n"
+        f"📊 <b>Текущее состояние магазина:</b>\n"
+        f"• Всего товаров: <b>{stats['total_count']} шт.</b>\n"
+        f"• Товаров с активной скидкой: <b>{stats['discounted_count']} шт.</b>\n\n"
+        "<i>Выберите, как применить скидку или повышение цены:</i>"
+    )
+    await cb.message.answer(text, reply_markup=pricing_main_kb(stats['total_count'], stats['discounted_count']), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:price_scope:all")
+async def adm_price_scope_all(cb: CallbackQuery, state: FSMContext, db: Database):
+    """Выбор операции для ВСЕХ товаров сразу."""
+    await state.clear()
+    stats = await db.get_pricing_summary()
+    text = (
+        "🌍 <b>Изменение цен на ВСЕ ТОВАРЫ ШОПА</b>\n\n"
+        f"📦 Всего товаров под изменение: <b>{stats['total_count']} шт.</b>\n"
+        f"🏷 Активных скидок сейчас: <b>{stats['discounted_count']} шт.</b>\n\n"
+        "<i>Выберите действие для всех товаров сразу:</i>"
+    )
+    rows = [
+        [InlineKeyboardButton(text="📉 Скидка на ВСЕ товары (%)", callback_data="adm:price_op:all:0:discount")],
+        [InlineKeyboardButton(text="📈 Повысить ВСЕ товары (%)", callback_data="adm:price_op:all:0:markup")],
+    ]
+    if stats['discounted_count'] > 0:
+        rows.append([InlineKeyboardButton(text="🔄 Сбросить скидки на всех товарах", callback_data="adm:price_reset_all_confirm")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:pricing")])
+    await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:price_scope:cats")
+async def adm_price_scope_cats(cb: CallbackQuery, db: Database):
+    """Выбор раздела для массового изменения."""
+    cats = await db.list_categories()
+    if not cats:
+        return await cb.answer("В магазине нет категорий", show_alert=True)
+    rows = [[InlineKeyboardButton(text=f"📁 {c['name']}", callback_data=f"adm:price_cat:{c['id']}")] for c in cats]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:pricing")])
+    await cb.message.answer("📁 <b>Выберите раздел для изменения цен:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:price_cat:"))
+async def adm_price_cat_chosen(cb: CallbackQuery, db: Database):
+    """Выбор операции для конкретного раздела."""
+    cat_id = int(cb.data.split(":")[2])
+    cat = await db.get_category(cat_id)
+    if not cat:
+        return await cb.answer("Раздел не найден", show_alert=True)
+    stats = await db.get_pricing_summary(category_id=cat_id)
+    text = (
+        f"📁 <b>Раздел «{cat['name']}»</b>\n\n"
+        f"📦 Товаров в этом разделе: <b>{stats['total_count']} шт.</b>\n"
+        f"🏷 Активных скидок в разделе: <b>{stats['discounted_count']} шт.</b>\n\n"
+        "<i>Выберите действие для всех товаров раздела:</i>"
+    )
+    rows = [
+        [InlineKeyboardButton(text="📉 Скидка на раздел (%)", callback_data=f"adm:price_op:cat:{cat_id}:discount")],
+        [InlineKeyboardButton(text="📈 Повысить раздел (%)", callback_data=f"adm:price_op:cat:{cat_id}:markup")],
+    ]
+    if stats['discounted_count'] > 0:
+        rows.append([InlineKeyboardButton(text="🔄 Сбросить скидки в разделе", callback_data=f"adm:price_reset:cat:{cat_id}")])
+    rows.append([InlineKeyboardButton(text="⬅️ К разделам", callback_data="adm:price_scope:cats")])
+    await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:price_scope:prods")
+async def adm_price_scope_prods(cb: CallbackQuery, db: Database):
+    """Выбор категории для поиска отдельного товара."""
+    cats = await db.list_categories()
+    if not cats:
+        return await cb.answer("В магазине нет категорий", show_alert=True)
+    rows = [[InlineKeyboardButton(text=f"📁 {c['name']}", callback_data=f"adm:price_cat_prods:{c['id']}")] for c in cats]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm:pricing")])
+    await cb.message.answer("📦 <b>Выберите раздел товара:</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:price_cat_prods:"))
+async def adm_price_cat_prods(cb: CallbackQuery, db: Database):
+    """Список товаров категории для изменения цены конкретного товара."""
+    cat_id = int(cb.data.split(":")[2])
+    prods = await db.list_products(cat_id, visible_only=False)
+    if not prods:
+        return await cb.answer("В разделе нет товаров", show_alert=True)
+    rows = []
+    for p in prods:
+        disc_badge = " 🔥" if ("old_price" in p.keys() and p["old_price"] and p["old_price"] > p["price"]) else ""
+        rows.append([InlineKeyboardButton(
+            text=f"{p['name']} — {texts.fmt_usd(p['price'])}{disc_badge}",
+            callback_data=f"adm:price_prod_menu:{p['id']}"
+        )])
+    rows.append([InlineKeyboardButton(text="⬅️ К разделам", callback_data="adm:price_scope:prods")])
+    await cb.message.answer("📦 <b>Выберите товар для изменения цены (%):</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:price_prod_menu:"))
+async def adm_price_prod_menu(cb: CallbackQuery, db: Database):
+    """Меню управления ценой одного конкретного товара."""
+    pid = int(cb.data.split(":")[2])
+    p = await db.get_product(pid)
+    if not p:
+        return await cb.answer("Товар не найден", show_alert=True)
+    
+    if "old_price" in p.keys() and p.get("old_price") and p["old_price"] > p["price"]:
+        disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
+        price_line = f"💵 Цена: <s>{texts.fmt_usd(p['old_price'])}</s> <b>{texts.fmt_usd(p['price'])}</b> 🔥 (-{disc_pct}%)"
+        has_disc = True
+    else:
+        price_line = f"💵 Цена: <b>{texts.fmt_usd(p['price'])}</b>"
+        has_disc = False
+
+    text = (
+        f"📦 <b>Товар: {p['name']}</b>\n\n"
+        f"{price_line}\n\n"
+        "<i>Выберите операцию над ценой этого товара:</i>"
+    )
+    rows = [
+        [InlineKeyboardButton(text="📉 Скидка на товар (%)", callback_data=f"adm:price_op:prod:{pid}:discount")],
+        [InlineKeyboardButton(text="📈 Повысить цену товара (%)", callback_data=f"adm:price_op:prod:{pid}:markup")],
+    ]
+    if has_disc:
+        rows.append([InlineKeyboardButton(text="🔄 Сбросить скидку (вернуть старую цену)", callback_data=f"adm:price_reset:prod:{pid}")])
+    rows.append([InlineKeyboardButton(text="⬅️ К списку товаров", callback_data=f"adm:price_cat_prods:{p['category_id']}")])
+    await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:price_op:"))
+async def adm_price_op_start(cb: CallbackQuery, state: FSMContext, db: Database):
+    """Запуск ввода процента для скидки или повышения."""
+    parts = cb.data.split(":")
+    scope = parts[2]       # all | cat | prod
+    target_id = int(parts[3])
+    op = parts[4]          # discount | markup
+
+    await state.clear()
+    await state.update_data(scope=scope, target_id=target_id, op=op)
+    await state.set_state(AdminPricingState.waiting_for_percent)
+
+    if scope == "all":
+        target_title = "ВСЕ товары магазина"
+    elif scope == "cat":
+        cat = await db.get_category(target_id)
+        target_title = f"раздел «{cat['name']}»" if cat else "раздел"
+    else:
+        prod = await db.get_product(target_id)
+        target_title = f"товар «{prod['name']}»" if prod else "товар"
+
+    await state.update_data(target_title=target_title)
+
+    if op == "discount":
+        text = (
+            f"📉 <b>Установка скидки в %</b>\n"
+            f"Область применения: <b>{target_title}</b>\n\n"
+            "Выберите процент скидки на клавиатуре или <b>отправьте число сообщением</b> (от 1 до 99):"
+        )
+    else:
+        text = (
+            f"📈 <b>Повышение цен (наценка в %)</b>\n"
+            f"Область применения: <b>{target_title}</b>\n\n"
+            "Выберите процент повышения на клавиатуре или <b>отправьте число сообщением</b> (например 10, 25, 50):"
+        )
+
+    await cb.message.answer(text, reply_markup=percent_choice_kb(op), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(AdminPricingState.waiting_for_percent, F.data.startswith("adm:price_val:"))
+async def adm_price_val_button(cb: CallbackQuery, state: FSMContext, db: Database):
+    """Выбор процента быстрой кнопкой."""
+    pct_val = float(cb.data.split(":")[2])
+    await _handle_percent_selected(cb.message, pct_val, state, db)
+    await cb.answer()
+
+
+@router.message(AdminPricingState.waiting_for_percent, F.text)
+async def adm_price_val_text(message: Message, state: FSMContext, db: Database):
+    """Ввод процента числом в чат."""
+    raw = message.text.strip().replace("%", "").replace(",", ".").replace("+", "").replace("-", "")
+    try:
+        val = float(raw)
+        if val <= 0:
+            return await message.answer("⚠️ Процент должен быть положительным числом больше 0. Попробуйте снова:")
+        data = await state.get_data()
+        if data.get("op") == "discount" and val >= 100:
+            return await message.answer("⚠️ Скидка не может быть 100% или больше. Введите число от 1 до 99:")
+    except ValueError:
+        return await message.answer("⚠️ Введите число (например: <code>15</code> или <code>20</code>):", parse_mode="HTML")
+
+    await _handle_percent_selected(message, val, state, db)
+
+
+async def _handle_percent_selected(target_msg: Message, percent: float, state: FSMContext, db: Database):
+    """Генерация экрана подтверждения с предпросмотром пересчёта цен."""
+    data = await state.get_data()
+    scope = data.get("scope", "all")
+    target_id = data.get("target_id", 0)
+    op = data.get("op", "discount")
+    target_title = data.get("target_title", "Товары")
+
+    await state.update_data(percent=percent)
+    await state.set_state(AdminPricingState.waiting_for_confirm)
+
+    op_name = f"Скидка <b>-{percent:g}%</b>" if op == "discount" else f"Повышение цены <b>+{percent:g}%</b>"
+
+    pid = target_id if scope == "prod" else None
+    cid = target_id if scope == "cat" else None
+    stats = await db.get_pricing_summary(product_id=pid, category_id=cid)
+    samples = stats.get("sample_products", [])
+
+    preview_lines = []
+    for p in samples:
+        cur_p = p["price"]
+        prev_old = p.get("old_price")
+        base_p = prev_old if (op == "discount" and prev_old is not None and prev_old > cur_p) else cur_p
+        if op == "discount":
+            new_p = max(1, int(round(base_p * (1.0 - percent / 100.0))))
+        else:
+            new_p = max(1, int(round(cur_p * (1.0 + percent / 100.0))))
+        preview_lines.append(f"• {p['name'][:30]}: {texts.fmt_usd(cur_p)} ➡️ <b>{texts.fmt_usd(new_p)}</b>")
+
+    preview_text = "\n".join(preview_lines) if preview_lines else "• Нет товаров для пересчёта"
+
+    confirm_text = (
+        f"⚠️ <b>ПОДТВЕРЖДЕНИЕ ИЗМЕНЕНИЯ ЦЕН</b>\n\n"
+        f"• <b>Объект:</b> {target_title} (товаров: <b>{stats['total_count']} шт.</b>)\n"
+        f"• <b>Операция:</b> {op_name}\n\n"
+        f"📋 <b>Пример пересчёта цен:</b>\n"
+        f"{preview_text}\n\n"
+        f"❓ <b>Применить изменения прямо сейчас?</b>"
+    )
+    rows = [
+        [InlineKeyboardButton(text="✅ Да, применить", callback_data="adm:price_confirm"),
+         InlineKeyboardButton(text="❌ Отмена", callback_data="adm:pricing")]
+    ]
+    await target_msg.answer(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
+@router.callback_query(AdminPricingState.waiting_for_confirm, F.data == "adm:price_confirm")
+async def adm_price_confirm_exec(cb: CallbackQuery, state: FSMContext, db: Database):
+    """Применение изменений цен в базе данных."""
+    data = await state.get_data()
+    scope = data.get("scope", "all")
+    target_id = data.get("target_id", 0)
+    op = data.get("op", "discount")
+    percent = float(data.get("percent", 0))
+    target_title = data.get("target_title", "Товары")
+    await state.clear()
+
+    pid = target_id if scope == "prod" else None
+    cid = target_id if scope == "cat" else None
+
+    if op == "discount":
+        count, updated = await db.apply_discount(percent=percent, product_id=pid, category_id=cid)
+        action_desc = f"Скидка <b>-{percent:g}%</b> успешно применена!"
+    else:
+        count, updated = await db.apply_markup(percent=percent, product_id=pid, category_id=cid)
+        action_desc = f"Повышение цен на <b>+{percent:g}%</b> успешно применено!"
+
+    samples_text = "\n".join([f"• {u['name'][:30]}: {texts.fmt_usd(u['old_price'])} ➡️ <b>{texts.fmt_usd(u['new_price'])}</b>" for u in updated[:4]])
+
+    res_text = (
+        f"✅ <b>Цены успешно обновлены!</b>\n\n"
+        f"• Затронуто: <b>{count} товаров</b> ({target_title})\n"
+        f"• {action_desc}\n\n"
+        f"📋 <b>Примеры обновлённых цен:</b>\n"
+        f"{samples_text}"
+    )
+    rows = [
+        [InlineKeyboardButton(text="🏷 В управление ценами", callback_data="adm:pricing")],
+        [InlineKeyboardButton(text="📦 К товарам", callback_data="adm:prods")],
+        [InlineKeyboardButton(text="⬅️ В админ-меню", callback_data="adm:menu")]
+    ]
+    await cb.message.answer(res_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+# ── Сброс скидок ──
+
+@router.callback_query(F.data == "adm:price_reset_all_confirm")
+async def adm_price_reset_all_confirm(cb: CallbackQuery, db: Database):
+    """Подтверждение сброса всех скидок магазина."""
+    stats = await db.get_pricing_summary()
+    text = (
+        f"⚠️ <b>Сброс ВСЕХ скидок магазина</b>\n\n"
+        f"Товаров с активными скидками: <b>{stats['discounted_count']} шт.</b>\n\n"
+        f"Всем товарам со скидкой будут возвращены их исходные базовые цены.\n\n"
+        f"Вы уверены?"
+    )
+    rows = [
+        [InlineKeyboardButton(text="✅ Да, сбросить все скидки", callback_data="adm:price_reset_all_exec")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="adm:pricing")]
+    ]
+    await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:price_reset_all_exec")
+async def adm_price_reset_all_exec(cb: CallbackQuery, db: Database):
+    """Выполнение сброса всех скидок."""
+    count = await db.reset_discounts()
+    await cb.message.answer(
+        f"✅ <b>Скидки сброшены!</b>\n\nВосстановлены исходные цены для <b>{count} товаров</b>.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏷 В управление ценами", callback_data="adm:pricing")],
+            [InlineKeyboardButton(text="⬅️ В админ-меню", callback_data="adm:menu")]
+        ]),
+        parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:price_reset:cat:"))
+async def adm_price_reset_cat(cb: CallbackQuery, db: Database):
+    """Сброс скидок в конкретном разделе."""
+    cat_id = int(cb.data.split(":")[3])
+    count = await db.reset_discounts(category_id=cat_id)
+    await cb.message.answer(
+        f"✅ <b>Скидки в разделе сброшены!</b>\n\nВосстановлены исходные цены для <b>{count} товаров</b>.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📁 К разделам", callback_data="adm:price_scope:cats")],
+            [InlineKeyboardButton(text="🏷 В управление ценами", callback_data="adm:pricing")]
+        ]),
+        parse_mode="HTML"
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:price_reset:prod:"))
+async def adm_price_reset_prod(cb: CallbackQuery, db: Database):
+    """Сброс скидки на одном товаре."""
+    pid = int(cb.data.split(":")[3])
+    count = await db.reset_discounts(product_id=pid)
+    p = await db.get_product(pid)
+    name = p["name"] if p else f"#{pid}"
+    cur_p = texts.fmt_usd(p["price"]) if p else ""
+    await cb.message.answer(
+        f"✅ <b>Скидка на товар «{name}» сброшена!</b>\n\nВосстановлена базовая цена: <b>{cur_p}</b>.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📦 К товару", callback_data=f"adm:prod:{pid}")],
+            [InlineKeyboardButton(text="🏷 В управление ценами", callback_data="adm:pricing")]
+        ]),
+        parse_mode="HTML"
+    )
+    await cb.answer()
+
 
 
 

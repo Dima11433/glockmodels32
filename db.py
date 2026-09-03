@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS products (
     content_type TEXT,
     content_value TEXT,
     visible INTEGER NOT NULL DEFAULT 1,
-    stock_override INTEGER DEFAULT NULL
+    stock_override INTEGER DEFAULT NULL,
+    old_price INTEGER DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS product_items (
@@ -258,6 +259,11 @@ class Database:
             pass
         try:
             await self.conn.execute("ALTER TABLE products ADD COLUMN stock_override INTEGER DEFAULT NULL")
+            await self.conn.commit()
+        except Exception:
+            pass
+        try:
+            await self.conn.execute("ALTER TABLE products ADD COLUMN old_price INTEGER DEFAULT NULL")
             await self.conn.commit()
         except Exception:
             pass
@@ -620,8 +626,148 @@ class Database:
     async def set_product_field(self, product_id: int, field: str, value) -> None:
         if field not in ("name", "description", "price"):
             raise ValueError(f"недопустимое поле: {field}")
-        await self.conn.execute(f"UPDATE products SET {field} = ? WHERE id = ?", (value, product_id))
+        if field == "price":
+            await self.conn.execute("UPDATE products SET price = ?, old_price = NULL WHERE id = ?", (value, product_id))
+        else:
+            await self.conn.execute(f"UPDATE products SET {field} = ? WHERE id = ?", (value, product_id))
         await self.conn.commit()
+
+    async def apply_discount(
+        self,
+        percent: float,
+        product_id: int | None = None,
+        category_id: int | None = None
+    ) -> tuple[int, list[dict]]:
+        """
+        Применяет скидку percent % (1..99).
+        Если old_price еще не был установлен, сохраняет текущую цену как old_price.
+        Возвращает (количество_товаров, список_товаров_до_и_после).
+        """
+        sql = "SELECT id, name, price, old_price FROM products WHERE 1=1"
+        params = []
+        if product_id:
+            sql += " AND id = ?"
+            params.append(product_id)
+        elif category_id:
+            sql += " AND category_id = ?"
+            params.append(category_id)
+        
+        cur = await self.conn.execute(sql, params)
+        rows = await cur.fetchall()
+        
+        updated = []
+        for r in rows:
+            pid = r["id"]
+            cur_price = r["price"]
+            prev_old = r["old_price"]
+            base_price = prev_old if (prev_old is not None and prev_old > cur_price) else cur_price
+            
+            # Новая цена со скидкой от base_price
+            new_price = max(1, int(round(base_price * (1.0 - percent / 100.0))))
+            await self.conn.execute(
+                "UPDATE products SET price = ?, old_price = ? WHERE id = ?",
+                (new_price, base_price, pid)
+            )
+            updated.append({
+                "id": pid,
+                "name": r["name"],
+                "old_price": cur_price,
+                "base_price": base_price,
+                "new_price": new_price
+            })
+        await self.conn.commit()
+        return len(updated), updated
+
+    async def apply_markup(
+        self,
+        percent: float,
+        product_id: int | None = None,
+        category_id: int | None = None
+    ) -> tuple[int, list[dict]]:
+        """
+        Повышает цену на percent %.
+        Возвращает (количество_товаров, список_товаров_до_и_после).
+        """
+        sql = "SELECT id, name, price, old_price FROM products WHERE 1=1"
+        params = []
+        if product_id:
+            sql += " AND id = ?"
+            params.append(product_id)
+        elif category_id:
+            sql += " AND category_id = ?"
+            params.append(category_id)
+            
+        cur = await self.conn.execute(sql, params)
+        rows = await cur.fetchall()
+        
+        updated = []
+        for r in rows:
+            pid = r["id"]
+            cur_price = r["price"]
+            new_price = max(1, int(round(cur_price * (1.0 + percent / 100.0))))
+            await self.conn.execute(
+                "UPDATE products SET price = ?, old_price = NULL WHERE id = ?",
+                (new_price, pid)
+            )
+            updated.append({
+                "id": pid,
+                "name": r["name"],
+                "old_price": cur_price,
+                "new_price": new_price
+            })
+        await self.conn.commit()
+        return len(updated), updated
+
+    async def reset_discounts(
+        self,
+        product_id: int | None = None,
+        category_id: int | None = None
+    ) -> int:
+        """
+        Сбрасывает скидки: возвращает сохранённую базовую цену old_price и обнуляет old_price.
+        Возвращает количество сброшенных товаров.
+        """
+        sql = "UPDATE products SET price = old_price, old_price = NULL WHERE old_price IS NOT NULL"
+        params = []
+        if product_id:
+            sql += " AND id = ?"
+            params.append(product_id)
+        elif category_id:
+            sql += " AND category_id = ?"
+            params.append(category_id)
+            
+        cur = await self.conn.execute(sql, params)
+        await self.conn.commit()
+        return cur.rowcount
+
+    async def get_pricing_summary(
+        self,
+        product_id: int | None = None,
+        category_id: int | None = None
+    ) -> dict:
+        """
+        Возвращает статистику цен по выбранной области:
+        - общее число товаров
+        - число товаров со скидкой
+        - примеры товаров с ценами
+        """
+        sql = "SELECT id, name, price, old_price FROM products WHERE 1=1"
+        params = []
+        if product_id:
+            sql += " AND id = ?"
+            params.append(product_id)
+        elif category_id:
+            sql += " AND category_id = ?"
+            params.append(category_id)
+        cur = await self.conn.execute(sql, params)
+        rows = await cur.fetchall()
+        
+        discounted = [r for r in rows if r["old_price"] is not None and r["old_price"] > r["price"]]
+        return {
+            "total_count": len(rows),
+            "discounted_count": len(discounted),
+            "sample_products": [dict(r) for r in rows[:4]]
+        }
 
     async def set_product_stock(self, product_id: int, count: int | None) -> None:
         """Установить количество единиц товара вручную. Если count is None, снимаем переопределение.

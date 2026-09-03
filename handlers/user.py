@@ -315,8 +315,14 @@ async def product_card(cb: CallbackQuery, db: Database):
     purchases = await db.list_purchases(cb.from_user.id, limit=100)
     purchased_this = [pur for pur in purchases if pur["product_id"] == product_id]
     
+    if "old_price" in p.keys() and p["old_price"] and p["old_price"] > p["price"]:
+        disc_pct = int(round((1 - p["price"] / p["old_price"]) * 100))
+        price_str = f"<s>{texts.fmt_usd(p['old_price'])}</s> <b>{texts.fmt_usd(p['price'])}</b> 🔥 <i>(-{disc_pct}%)</i>"
+    else:
+        price_str = f"<b>{texts.fmt_usd(p['price'])}</b>"
+
     text = (f"📦 {p['name']}\n\n{p['description']}\n\n"
-            f"💵 Цена: {texts.fmt_usd(p['price'])}\n📦 В наличии: {stock}")
+            f"💵 Цена: {price_str}\n📦 В наличии: {stock}")
     
     # Информация о покупке
     if purchased_this:
