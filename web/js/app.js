@@ -820,6 +820,10 @@ async function refreshUserProfile() {
     if (nameEl) nameEl.innerText = data.username ? `@${data.username}` : `Пользователь #${data.id}`;
     if (idEl) idEl.innerText = `Telegram ID: ${data.id}`;
     if (balanceEl) balanceEl.innerText = formatPrice(data.balance_cents);
+    if (avatarEl) {
+      const char = (data.username ? data.username[0] : '') || '👤';
+      avatarEl.innerText = char.toUpperCase();
+    }
 
     // Лояльность
     const loyalty = data.loyalty;
@@ -865,14 +869,14 @@ async function refreshUserProfile() {
         purchasesList.innerHTML = '<p class="empty-hint">У вас пока нет покупок. Перейдите в каталог!</p>';
       } else {
         purchasesList.innerHTML = items.map(p => `
-          <div class="purchase-item">
-            <div class="purchase-info">
-              <span class="purchase-title">📦 ${escapeHtml(p.product_name)}</span>
-              <span class="purchase-date">${escapeHtml(p.created_at || '')}</span>
+          <div class="purchase-card">
+            <div class="purchase-card-top">
+              <span class="purchase-card-name">📦 ${escapeHtml(p.product_name)}</span>
+              <span class="purchase-card-date">${escapeHtml(p.created_at || '')}</span>
             </div>
-            <div class="purchase-val-row">
-              <div class="purchase-content">${escapeHtml(p.content_value || 'Цифровой товар')}</div>
-              <button class="btn-copy-sm" onclick="copyRawText('${escapeAttr(p.content_value || '')}')">Копировать</button>
+            <div class="purchase-card-link-row">
+              <span class="purchase-card-link">${escapeHtml(p.content_value || 'Цифровой товар')}</span>
+              <button class="btn-copy-card" onclick="copyRawText('${escapeAttr(p.content_value || '')}')">Скопировать</button>
             </div>
           </div>
         `).join('');
@@ -926,26 +930,136 @@ async function logout() {
 // АВТОРИЗАЦИЯ TELEGRAM
 // ==========================================
 
+let botAuthPollTimer = null;
+
 function openLoginModal() {
-  const widgetContainer = document.getElementById('telegramWidgetContainer');
-  if (widgetContainer && state.config.bot_username) {
-    // Вставляем официальный скрипт Telegram Login Widget
-    widgetContainer.innerHTML = '';
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = 'https://telegram.org/js/telegram-widget.js?22';
-    script.setAttribute('data-telegram-login', state.config.bot_username);
-    script.setAttribute('data-size', 'large');
-    script.setAttribute('data-radius', '8');
-    script.setAttribute('data-onauth', 'onTelegramAuth(user)');
-    script.setAttribute('data-request-access', 'write');
-    widgetContainer.appendChild(script);
+  if (botAuthPollTimer) {
+    clearInterval(botAuthPollTimer);
+    botAuthPollTimer = null;
   }
+  const waitingEl = document.getElementById('botAuthWaiting');
+  if (waitingEl) waitingEl.style.display = 'none';
+  const btnAuth = document.getElementById('btnAuthViaBot');
+  if (btnAuth) {
+    btnAuth.disabled = false;
+    btnAuth.innerHTML = '<span class="tg-paper-icon">✈️</span> Войти в 1 клик через Telegram';
+  }
+  const idInput = document.getElementById('loginIdentifier');
+  if (idInput) idInput.value = '';
 
   openModal('loginModal');
 }
 
-// Callback от Telegram Login Widget
+// Способ 1: Вход в 1 клик через Telegram бота
+async function startBotAuthFlow() {
+  const btnAuth = document.getElementById('btnAuthViaBot');
+  const waitingEl = document.getElementById('botAuthWaiting');
+  const statusText = document.getElementById('botAuthStatusText');
+
+  try {
+    if (btnAuth) btnAuth.disabled = true;
+    if (waitingEl) waitingEl.style.display = 'flex';
+    if (statusText) statusText.innerText = 'Создание сессии входа...';
+
+    const res = await fetch('/api/auth/bot_create', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || !data.token) {
+      throw new Error(data.error || 'Не удалось создать токен авторизации');
+    }
+
+    const botUrl = data.bot_url;
+    const botName = data.bot_username || 'glock_models_bot';
+    if (statusText) {
+      statusText.innerHTML = `Открываем бота... Нажмите <b>Старт</b> в <a href="${botUrl}" target="_blank" style="color:#fff;text-decoration:underline;">@${botName}</a>`;
+    }
+
+    // Открываем Telegram deep-link
+    window.open(botUrl, '_blank');
+
+    // Опрашиваем сервер каждые 1.5 секунды
+    if (botAuthPollTimer) clearInterval(botAuthPollTimer);
+    let elapsed = 0;
+    botAuthPollTimer = setInterval(async () => {
+      elapsed += 1500;
+      if (elapsed > 120000) {
+        clearInterval(botAuthPollTimer);
+        botAuthPollTimer = null;
+        if (waitingEl) waitingEl.style.display = 'none';
+        if (btnAuth) btnAuth.disabled = false;
+        showToast('Время ожидания входа истекло. Попробуйте снова.', 'warning');
+        return;
+      }
+
+      try {
+        const pollRes = await fetch(`/api/auth/bot_poll/${data.token}`);
+        const pollData = await pollRes.json();
+        if (pollData.status === 'confirmed' && pollData.user) {
+          clearInterval(botAuthPollTimer);
+          botAuthPollTimer = null;
+          if (waitingEl) waitingEl.style.display = 'none';
+          if (btnAuth) btnAuth.disabled = false;
+
+          state.user = pollData.user;
+          renderAuthContainer();
+          closeModal('loginModal');
+          const dispName = pollData.user.username ? `@${pollData.user.username}` : (pollData.user.first_name || `ID ${pollData.user.id}`);
+          showToast(`Добро пожаловать, ${dispName}!`, 'success');
+
+          if (state.selectedProduct) {
+            openProductModal(state.selectedProduct.id);
+          }
+        }
+      } catch (pollErr) {
+        console.warn('Ошибка проверки токена:', pollErr);
+      }
+    }, 1500);
+
+  } catch (err) {
+    console.error('Ошибка входа через бота:', err);
+    showToast(err.message || 'Ошибка входа через бота', 'error');
+    if (btnAuth) btnAuth.disabled = false;
+    if (waitingEl) waitingEl.style.display = 'none';
+  }
+}
+
+// Способ 2: Вход по Telegram @username или ID
+async function handleIdentifierLogin() {
+  const input = document.getElementById('loginIdentifier');
+  const rawVal = input ? input.value.trim() : '';
+  if (!rawVal) {
+    showToast('Введите ваш @username или ID', 'warning');
+    if (input) input.focus();
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/auth/identifier', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: rawVal })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Пользователь с таким ником или ID не найден', 'error');
+      return;
+    }
+
+    state.user = data.user;
+    renderAuthContainer();
+    closeModal('loginModal');
+    const dispName = data.user.username ? `@${data.user.username}` : (data.user.first_name || `ID ${data.user.id}`);
+    showToast(`Успешный вход под ${dispName}!`, 'success');
+
+    if (state.selectedProduct) {
+      openProductModal(state.selectedProduct.id);
+    }
+  } catch (err) {
+    console.error('Ошибка входа по нику/ID:', err);
+    showToast('Ошибка при проверке пользователя', 'error');
+  }
+}
+
+// Callback на случай внешнего Telegram Login Widget
 async function handleTelegramAuthCallback(user) {
   try {
     const payload = { ...user };
@@ -971,7 +1085,6 @@ async function handleTelegramAuthCallback(user) {
     closeModal('loginModal');
     showToast(`Добро пожаловать, ${data.user.username ? '@' + data.user.username : data.user.first_name}!`, 'success');
 
-    // Если был открыт товар — обновляем кнопку в нем
     if (state.selectedProduct) {
       openProductModal(state.selectedProduct.id);
     }
@@ -979,38 +1092,6 @@ async function handleTelegramAuthCallback(user) {
   } catch (err) {
     console.error('Ошибка входа через Telegram:', err);
     showToast('Ошибка при входе через Telegram', 'error');
-  }
-}
-
-// Быстрый тестовый вход по Telegram ID (для разработки и проверки баланса)
-async function handleTestLogin() {
-  const input = document.getElementById('testLoginId');
-  const userId = input ? parseInt(input.value) : 0;
-
-  try {
-    const res = await fetch('/api/auth/test_login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId || null })
-    });
-
-    const data = await res.json();
-    if (!res.ok || data.error) {
-      showToast(data.error || 'Ошибка тестового входа', 'error');
-      return;
-    }
-
-    state.user = data.user;
-    renderAuthContainer();
-    closeModal('loginModal');
-    showToast(`Успешный вход под ID ${data.user.id}!`, 'success');
-
-    if (state.selectedProduct) {
-      openProductModal(state.selectedProduct.id);
-    }
-  } catch (err) {
-    console.error('Ошибка тестового входа:', err);
-    showToast('Ошибка входа', 'error');
   }
 }
 
@@ -1073,6 +1154,12 @@ function closeModal(modalId) {
   }
   if (modalId === 'topupModal') {
     stopCryptoPolling();
+  }
+  if (modalId === 'loginModal') {
+    if (botAuthPollTimer) {
+      clearInterval(botAuthPollTimer);
+      botAuthPollTimer = null;
+    }
   }
 }
 

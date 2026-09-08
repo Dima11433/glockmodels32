@@ -308,6 +308,124 @@ async def handle_auth_telegram(request: web.Request):
     return response
 
 
+async def handle_auth_identifier(request: web.Request):
+    """Вход по @username или Telegram ID с поддержкой всех пользователей бота."""
+    try:
+        data = await request.json()
+        raw_ident = str(data.get("identifier", "")).strip()
+    except Exception:
+        return web.json_response({"error": "Укажите username или Telegram ID"}, status=400)
+
+    if not raw_ident:
+        return web.json_response({"error": "Введите @username или Telegram ID"}, status=400)
+
+    ident = raw_ident.lstrip("@").strip()
+    user_row = None
+
+    if ident.isdigit():
+        cur = await db.conn.execute("SELECT id, username, balance FROM users WHERE id = ?", (int(ident),))
+        user_row = await cur.fetchone()
+
+    if not user_row:
+        cur = await db.conn.execute("SELECT id, username, balance FROM users WHERE LOWER(username) = LOWER(?)", (ident,))
+        user_row = await cur.fetchone()
+
+    if user_row:
+        user_id = user_row[0]
+        username = user_row[1]
+    else:
+        if ident.isdigit():
+            user_id = int(ident)
+            username = f"user_{user_id}"
+        else:
+            user_id = int(hashlib.md5(ident.encode()).hexdigest()[:8], 16) % 900000000 + 100000000
+            username = ident
+        await db.get_or_create_user(user_id, username)
+
+    user = await db.get_user(user_id)
+
+    # Привязка реферера
+    ref_id = data.get("referrer_id")
+    if ref_id and not user["referrer_id"]:
+        try:
+            r_int = int(ref_id)
+            if r_int != user_id:
+                await db.conn.execute("UPDATE users SET referrer_id = ? WHERE id = ?", (r_int, user_id))
+                await db.conn.commit()
+        except Exception:
+            pass
+
+    token = generate_session_token(user_id)
+    SESSIONS[token]["username"] = user["username"]
+
+    response = web.json_response({
+        "status": "ok",
+        "token": token,
+        "user": {
+            "id": user_id,
+            "username": user["username"],
+            "balance_cents": user["balance"],
+            "balance_usd": f"${user['balance'] / 100:.2f}",
+            "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+        }
+    })
+    response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
+    return response
+
+
+async def handle_auth_bot_create(request: web.Request):
+    """Генерация ссылки для бесшовного входа через Telegram-бота."""
+    tok = uuid.uuid4().hex[:12]
+    now = time.time()
+    await db.conn.execute(
+        "INSERT INTO site_auth_tokens (token, status, created_at) VALUES (?, 'pending', ?)",
+        (tok, now)
+    )
+    await db.conn.commit()
+    bot_name = config.bot_username or "glock_models_bot"
+    bot_url = f"https://t.me/{bot_name}?start=auth_{tok}"
+    return web.json_response({
+        "status": "ok",
+        "token": tok,
+        "bot_url": bot_url,
+    })
+
+
+async def handle_auth_bot_poll(request: web.Request):
+    """Проверка подтверждения авторизации ботом."""
+    tok = request.match_info["token"]
+    cur = await db.conn.execute(
+        "SELECT user_id, username, first_name, status FROM site_auth_tokens WHERE token = ?",
+        (tok,)
+    )
+    row = await cur.fetchone()
+    if not row:
+        return web.json_response({"error": "Токен не найден"}, status=404)
+
+    user_id, username, first_name, status = row
+    if status != "confirmed" or not user_id:
+        return web.json_response({"status": "pending"})
+
+    user = await db.get_or_create_user(user_id, username)
+    session_token = generate_session_token(user_id)
+    SESSIONS[session_token]["username"] = username
+    SESSIONS[session_token]["first_name"] = first_name
+
+    response = web.json_response({
+        "status": "confirmed",
+        "token": session_token,
+        "user": {
+            "id": user_id,
+            "username": user["username"],
+            "balance_cents": user["balance"],
+            "balance_usd": f"${user['balance'] / 100:.2f}",
+            "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+        }
+    })
+    response.set_cookie("session_token", session_token, max_age=86400 * 30, httponly=False, samesite="Lax")
+    return response
+
+
 async def handle_auth_demo(request: web.Request):
     """Тестовый/демо вход по ID для локальной разработки или тестирования без виджета."""
     try:
@@ -317,13 +435,9 @@ async def handle_auth_demo(request: web.Request):
         return web.json_response({"error": "Укажите user_id"}, status=400)
 
     if not user_id:
-        # Берем первого пользователя из базы для демо
         cur = await db.conn.execute("SELECT id, username FROM users ORDER BY id LIMIT 1")
         row = await cur.fetchone()
-        if row:
-            user_id = row[0]
-        else:
-            user_id = 999999999
+        user_id = row[0] if row else 999999999
 
     user = await db.get_or_create_user(user_id, f"user_{user_id}")
     token = generate_session_token(user_id)
@@ -340,6 +454,7 @@ async def handle_auth_demo(request: web.Request):
     })
     response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
     return response
+
 
 
 async def handle_auth_logout(request: web.Request):
@@ -717,6 +832,17 @@ async def handle_index(request: web.Request):
 
 async def on_startup(app: web.Application):
     await db.connect()
+    await db.conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_auth_tokens (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER,
+            username TEXT,
+            first_name TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at REAL
+        )
+    """)
+    await db.conn.commit()
     try:
         get_payments()
     except Exception as e:
@@ -746,6 +872,9 @@ def create_app() -> web.Application:
     app.router.add_get("/api/product/{id}", handle_product_detail)
 
     # Авторизация
+    app.router.add_post("/api/auth/identifier", handle_auth_identifier)
+    app.router.add_post("/api/auth/bot_create", handle_auth_bot_create)
+    app.router.add_get("/api/auth/bot_poll/{token}", handle_auth_bot_poll)
     app.router.add_post("/api/auth/telegram", handle_auth_telegram)
     app.router.add_post("/api/auth/test_login", handle_auth_demo)
     app.router.add_post("/api/auth/logout", handle_auth_logout)

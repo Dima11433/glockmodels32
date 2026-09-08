@@ -263,16 +263,20 @@
     <div class="modal-card modal-profile">
       <button class="modal-close" onclick="closeModal('profileModal')">✕</button>
       
-      <div class="profile-header">
-        <div class="profile-avatar" id="profAvatar">👤</div>
-        <div class="profile-info">
-          <h3 class="profile-name" id="profName">Пользователь</h3>
-          <span class="profile-id" id="profId">ID: 000000000</span>
+      <div class="profile-header-card">
+        <div class="profile-user-row">
+          <div class="profile-avatar" id="profAvatar">👤</div>
+          <div class="profile-info">
+            <h3 class="profile-name" id="profName">Пользователь</h3>
+            <span class="profile-id" id="profId">ID: 000000000</span>
+          </div>
         </div>
-        <div class="profile-balance-badge">
-          <span class="lbl">Баланс:</span>
-          <span class="val" id="profBalance">$0.00</span>
-          <button class="btn btn-sm btn-primary" onclick="openTopupModal()">+ Пополнить</button>
+        <div class="profile-balance-card">
+          <span class="balance-lbl">Баланс кошелька:</span>
+          <div class="balance-val-row">
+            <span class="balance-val" id="profBalance">$0.00</span>
+            <button class="btn btn-sm btn-primary" onclick="openTopupModal()">+ Пополнить</button>
+          </div>
         </div>
       </div>
 
@@ -280,21 +284,21 @@
       <div class="profile-section loyalty-box">
         <div class="loyalty-header">
           <span class="loyalty-tier" id="profLoyaltyTier">🥉 Бронза (0%)</span>
-          <span class="loyalty-spent" id="profTotalSpent">Потрачено: $0.00</span>
+          <span class="loyalty-spent" id="profTotalSpent">Всего покупок: $0.00</span>
         </div>
         <div class="loyalty-bar">
           <div class="loyalty-bar-fill" id="profLoyaltyProgress" style="width: 10%;"></div>
         </div>
-        <p class="loyalty-hint" id="profLoyaltyHint">Достигайте новых статусов для получения постоянной скидки на все товары!</p>
+        <p class="loyalty-hint" id="profLoyaltyHint">Достигайте новых статусов для получения постоянной VIP-скидки!</p>
       </div>
 
       <!-- Реферальная система на сайт -->
       <div class="profile-section referral-box">
         <h4 class="section-subheading">🤝 Реферальная программа</h4>
-        <p class="ref-desc">Делитесь ссылкой на сайт! Получайте проценты с каждой покупки ваших друзей прямо на баланс.</p>
+        <p class="ref-desc">Приглашайте друзей по вашей ссылке и получайте проценты с каждой покупки прямо на баланс!</p>
         <div class="ref-link-row">
           <input type="text" id="profRefLink" readonly value="https://...">
-          <button class="btn btn-primary" onclick="copyText('profRefLink', true)">📋 Скопировать</button>
+          <button class="btn btn-primary btn-copy-ref" onclick="copyText('profRefLink', true)">📋 Скопировать</button>
         </div>
         <div class="ref-stats-row">
           <div class="ref-stat"><span class="val" id="profRefInvited">0</span><span class="lbl">Приглашено</span></div>
@@ -326,35 +330,48 @@
       <h3 class="modal-heading">Спасибо за покупку!</h3>
       <p class="modal-subheading" id="successProdTitle">Товар успешно оплачен</p>
       <div class="delivered-content-box">
-        <label>Выданный товар / Ключ / Ссылка:</label>
+        <label>Выданный товар / Ссылка на пак:</label>
         <div class="delivered-value" id="successDeliveredValue">...</div>
-        <button class="btn btn-primary btn-block mt-2" onclick="copyText('successDeliveredValue')">📋 Скопировать товар</button>
+        <button class="btn btn-primary btn-block mt-2" onclick="copyText('successDeliveredValue')">📋 Скопировать ссылку</button>
       </div>
-      <p class="delivered-hint">Вы также всегда можете найти этот товар в разделе <b>«Профиль» → «Мои покупки»</b>.</p>
+      <p class="delivered-hint">Вы также всегда можете найти этот пак в разделе <b>«Профиль» → «Мои покупки»</b>.</p>
       <button class="btn btn-outline btn-block mt-3" onclick="closeModal('successPurchaseModal')">Вернуться к покупкам</button>
     </div>
   </div>
 
-  <!-- Модальное окно входа через Telegram -->
+  <!-- Модальное окно входа в аккаунт -->
   <div class="modal-overlay" id="loginModal" onclick="closeModalOnOverlay(event, 'loginModal')">
     <div class="modal-card modal-login">
       <button class="modal-close" onclick="closeModal('loginModal')">✕</button>
       <div class="login-header-icon">✈️</div>
-      <h3 class="modal-heading">Вход через Telegram</h3>
-      <p class="modal-subheading">Авторизуйтесь, чтобы синхронизировать баланс, персональную скидку и заказы с ботом</p>
+      <h3 class="modal-heading">Вход в аккаунт</h3>
+      <p class="modal-subheading">Единый баланс, скидки и история покупок с ботом</p>
       
-      <!-- Контейнер для официального Telegram Login Widget -->
-      <div class="telegram-widget-wrapper" id="telegramWidgetContainer">
-        <!-- Скрипт виджета инжектится из app.js -->
+      <!-- Способ 1: Вход в 1 клик через бота -->
+      <div class="login-bot-block">
+        <button class="btn btn-tg-auth btn-block" id="btnAuthViaBot" onclick="startBotAuthFlow()">
+          <span class="tg-paper-icon">✈️</span> Войти в 1 клик через Telegram
+        </button>
+        <div class="bot-auth-spinner" id="botAuthWaiting" style="display: none;">
+          <div class="spinner-small"></div>
+          <span id="botAuthStatusText">Ожидание подтверждения в @glock_models_bot...</span>
+        </div>
       </div>
 
-      <div class="login-divider"><span>или для быстрого тестирования</span></div>
+      <div class="login-divider"><span>или по Telegram @username / ID</span></div>
 
-      <!-- Быстрый тестовый вход по Telegram ID -->
-      <div class="test-login-box">
-        <input type="number" id="testLoginId" placeholder="Введите Telegram ID (например 123456789)">
-        <button class="btn btn-outline btn-block mt-2" onclick="handleTestLogin()">Войти по ID</button>
+      <!-- Способ 2: Вход по @username или ID -->
+      <div class="login-form-block">
+        <div class="input-with-icon">
+          <span class="input-prefix">@</span>
+          <input type="text" id="loginIdentifier" placeholder="Ваш никнейм (например dimaz) или ID" onkeydown="if(event.key==='Enter')handleIdentifierLogin()">
+        </div>
+        <button class="btn btn-primary btn-block mt-2" onclick="handleIdentifierLogin()">
+          Войти в аккаунт
+        </button>
+        <p class="login-safe-hint">🔒 Баланс и скидки моментально подтягиваются из базы бота</p>
       </div>
+
     </div>
   </div>
 

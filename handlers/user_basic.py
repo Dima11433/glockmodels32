@@ -128,6 +128,26 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, stat
                 pass
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ─── Авторизация на веб-сайте через бота /start auth_<token> ───
+    if command.args and command.args.startswith("auth_"):
+        auth_tok = command.args[5:]
+        try:
+            cur = await db.conn.execute(
+                "UPDATE site_auth_tokens SET user_id = ?, username = ?, first_name = ?, status = 'confirmed' WHERE token = ?",
+                (message.from_user.id, message.from_user.username or "", message.from_user.first_name or "", auth_tok)
+            )
+            await db.conn.commit()
+            if cur.rowcount > 0:
+                await message.answer(
+                    "✅ <b>Вход на сайт успешно подтвержден!</b>\n\n"
+                    f"Вы авторизовались как <b>@{message.from_user.username or message.from_user.id}</b>.\n"
+                    "Перейдите во вкладку браузера с сайтом — вы уже в своём профиле! 🚀",
+                    parse_mode="HTML"
+                )
+                return
+        except Exception:
+            pass
+
     # Активация чека через аргумент /start chk_...
     if command.args and command.args.startswith("chk_"):
         from handlers.checks_promos import handle_check_start
