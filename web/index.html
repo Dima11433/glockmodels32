@@ -339,37 +339,62 @@
     </div>
   </div>
 
-  <!-- Модальное окно входа в аккаунт -->
+  <!-- Модальное окно входа в аккаунт (OTP код в Telegram) -->
   <div class="modal-overlay" id="loginModal" onclick="closeModalOnOverlay(event, 'loginModal')">
     <div class="modal-card modal-login">
       <button class="modal-close" onclick="closeModal('loginModal')">✕</button>
-      <div class="login-header-icon">✈️</div>
+      <div class="login-header-icon">🔐</div>
       <h3 class="modal-heading">Вход в аккаунт</h3>
       <p class="modal-subheading">Единый баланс, скидки и история покупок с ботом</p>
       
-      <!-- Способ 1: Вход в 1 клик через бота -->
-      <div class="login-bot-block">
-        <button class="btn btn-tg-auth btn-block" id="btnAuthViaBot" onclick="startBotAuthFlow()">
-          <span class="tg-paper-icon">✈️</span> Войти в 1 клик через Telegram
+      <!-- ШАГ 1: Ввод никнейма / ID -->
+      <div id="loginStepIdentifier">
+        <p class="login-step-hint">Введите ваш Telegram <b>@username</b> или ID — мы отправим 6-значный код подтверждения в чат с ботом:</p>
+        <div class="input-with-icon">
+          <span class="input-prefix">@</span>
+          <input type="text" id="loginIdentifier" placeholder="Ваш никнейм (например ggg468q) или ID" onkeydown="if(event.key==='Enter')handleSendCode()">
+        </div>
+        <button class="btn btn-primary btn-block mt-3 btn-lg" id="btnSendCode" onclick="handleSendCode()">
+          Получить код в Telegram 🚀
+        </button>
+        <p class="login-safe-hint">⚡ Код придёт прямо в Telegram, даже если бот сейчас отключён!</p>
+
+        <div class="login-divider"><span>или альтернативный вход</span></div>
+
+        <button class="btn btn-outline btn-block" id="btnAuthViaBot" onclick="startBotAuthFlow()">
+          <span class="tg-paper-icon">✈️</span> Войти в 1 клик через бота
         </button>
         <div class="bot-auth-spinner" id="botAuthWaiting" style="display: none;">
           <div class="spinner-small"></div>
-          <span id="botAuthStatusText">Ожидание подтверждения в @glock_models_bot...</span>
+          <span id="botAuthStatusText">Ожидание в @glock_models_bot...</span>
         </div>
       </div>
 
-      <div class="login-divider"><span>или по Telegram @username / ID</span></div>
-
-      <!-- Способ 2: Вход по @username или ID -->
-      <div class="login-form-block">
-        <div class="input-with-icon">
-          <span class="input-prefix">@</span>
-          <input type="text" id="loginIdentifier" placeholder="Ваш никнейм (например dimaz) или ID" onkeydown="if(event.key==='Enter')handleIdentifierLogin()">
+      <!-- ШАГ 2: Ввод полученного 6-значного кода -->
+      <div id="loginStepCode" style="display: none;">
+        <div class="otp-target-card">
+          <span class="otp-target-icon">📩</span>
+          <div class="otp-target-text">
+            <span>Код отправлен пользователю</span>
+            <b id="otpTargetUsername">@ggg468q</b>
+          </div>
         </div>
-        <button class="btn btn-primary btn-block mt-2" onclick="handleIdentifierLogin()">
-          Войти в аккаунт
+
+        <p class="login-step-hint mt-2">Введите 6 цифр из сообщения в Telegram:</p>
+        
+        <div class="otp-input-wrap mt-2">
+          <input type="text" id="loginOtpCode" maxlength="6" inputmode="numeric" placeholder="••••••" oninput="if(this.value.length===6)handleVerifyCode()" onkeydown="if(event.key==='Enter')handleVerifyCode()">
+        </div>
+
+        <button class="btn btn-primary btn-block mt-3 btn-lg" id="btnVerifyCode" onclick="handleVerifyCode()">
+          Подтвердить и войти 🔑
         </button>
-        <p class="login-safe-hint">🔒 Баланс и скидки моментально подтягиваются из базы бота</p>
+
+        <div class="otp-actions-row mt-3">
+          <button class="btn-link" id="btnResendCode" onclick="handleResendCode()">Отправить повторно</button>
+          <span class="otp-sep">•</span>
+          <button class="btn-link" onclick="backToIdentifierStep()">Сменить никнейм</button>
+        </div>
       </div>
 
     </div>

@@ -931,26 +931,226 @@ async function logout() {
 // ==========================================
 
 let botAuthPollTimer = null;
+let currentAuthUserId = null;
+let currentAuthUsername = null;
+let resendCountdownTimer = null;
 
 function openLoginModal() {
   if (botAuthPollTimer) {
     clearInterval(botAuthPollTimer);
     botAuthPollTimer = null;
   }
+  if (resendCountdownTimer) {
+    clearInterval(resendCountdownTimer);
+    resendCountdownTimer = null;
+  }
+
+  // Сброс на шаг 1
+  backToIdentifierStep();
+
+  const idInput = document.getElementById('loginIdentifier');
+  if (idInput) idInput.value = '';
+  const otpInput = document.getElementById('loginOtpCode');
+  if (otpInput) otpInput.value = '';
+
   const waitingEl = document.getElementById('botAuthWaiting');
   if (waitingEl) waitingEl.style.display = 'none';
   const btnAuth = document.getElementById('btnAuthViaBot');
   if (btnAuth) {
     btnAuth.disabled = false;
-    btnAuth.innerHTML = '<span class="tg-paper-icon">✈️</span> Войти в 1 клик через Telegram';
+    btnAuth.innerHTML = '<span class="tg-paper-icon">✈️</span> Войти в 1 клик через бота';
   }
-  const idInput = document.getElementById('loginIdentifier');
-  if (idInput) idInput.value = '';
+
+  const btnSend = document.getElementById('btnSendCode');
+  if (btnSend) {
+    btnSend.disabled = false;
+    btnSend.innerHTML = 'Получить код в Telegram 🚀';
+  }
 
   openModal('loginModal');
+  setTimeout(() => {
+    if (idInput) idInput.focus();
+  }, 100);
 }
 
-// Способ 1: Вход в 1 клик через Telegram бота
+function backToIdentifierStep() {
+  const stepId = document.getElementById('loginStepIdentifier');
+  const stepCode = document.getElementById('loginStepCode');
+  if (stepId) stepId.style.display = 'block';
+  if (stepCode) stepCode.style.display = 'none';
+
+  const idInput = document.getElementById('loginIdentifier');
+  if (idInput) idInput.focus();
+}
+
+// Шаг 1: Запрос одноразового кода в Telegram
+async function handleSendCode() {
+  const input = document.getElementById('loginIdentifier');
+  const btnSend = document.getElementById('btnSendCode');
+  const rawVal = input ? input.value.trim() : '';
+
+  if (!rawVal) {
+    showToast('Введите ваш никнейм (@username) или Telegram ID', 'warning');
+    if (input) input.focus();
+    return;
+  }
+
+  try {
+    if (btnSend) {
+      btnSend.disabled = true;
+      btnSend.innerHTML = '<div class="spinner-small"></div> Отправка кода в Telegram...';
+    }
+
+    const res = await fetch('/api/auth/send_code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: rawVal })
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Не удалось отправить код', 'error');
+      if (btnSend) {
+        btnSend.disabled = false;
+        btnSend.innerHTML = 'Получить код в Telegram 🚀';
+      }
+      return;
+    }
+
+    // Успешно отправлено
+    currentAuthUserId = data.user_id;
+    currentAuthUsername = data.username;
+
+    const targetUserEl = document.getElementById('otpTargetUsername');
+    if (targetUserEl) targetUserEl.innerText = `@${data.username}`;
+
+    const stepId = document.getElementById('loginStepIdentifier');
+    const stepCode = document.getElementById('loginStepCode');
+    if (stepId) stepId.style.display = 'none';
+    if (stepCode) stepCode.style.display = 'block';
+
+    const otpInput = document.getElementById('loginOtpCode');
+    if (otpInput) {
+      otpInput.value = '';
+      otpInput.focus();
+    }
+
+    startResendCountdown(60);
+    showToast(`Код отправлен пользователю @${data.username} в Telegram! 📲`, 'success');
+
+  } catch (err) {
+    console.error('Ошибка запроса кода:', err);
+    showToast('Ошибка при запросе кода. Попробуйте еще раз', 'error');
+  } finally {
+    if (btnSend) {
+      btnSend.disabled = false;
+      btnSend.innerHTML = 'Получить код в Telegram 🚀';
+    }
+  }
+}
+
+function startResendCountdown(seconds) {
+  const btnResend = document.getElementById('btnResendCode');
+  if (!btnResend) return;
+
+  if (resendCountdownTimer) clearInterval(resendCountdownTimer);
+
+  let remaining = seconds;
+  btnResend.disabled = true;
+  btnResend.style.pointerEvents = 'none';
+  btnResend.style.opacity = '0.5';
+  btnResend.innerText = `Отправить повторно (${remaining}s)`;
+
+  resendCountdownTimer = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(resendCountdownTimer);
+      resendCountdownTimer = null;
+      btnResend.disabled = false;
+      btnResend.style.pointerEvents = 'auto';
+      btnResend.style.opacity = '1';
+      btnResend.innerText = 'Отправить повторно';
+    } else {
+      btnResend.innerText = `Отправить повторно (${remaining}s)`;
+    }
+  }, 1000);
+}
+
+function handleResendCode() {
+  handleSendCode();
+}
+
+// Шаг 2: Проверка 6-значного кода
+async function handleVerifyCode() {
+  const otpInput = document.getElementById('loginOtpCode');
+  const btnVerify = document.getElementById('btnVerifyCode');
+  const codeVal = otpInput ? otpInput.value.trim() : '';
+
+  if (!codeVal || codeVal.length < 6) {
+    showToast('Введите 6 цифр кода из сообщения', 'warning');
+    if (otpInput) otpInput.focus();
+    return;
+  }
+
+  if (!currentAuthUserId) {
+    showToast('Ошибка сессии авторизации. Запросите код заново', 'error');
+    backToIdentifierStep();
+    return;
+  }
+
+  try {
+    if (btnVerify) {
+      btnVerify.disabled = true;
+      btnVerify.innerHTML = '<div class="spinner-small"></div> Проверка кода...';
+    }
+
+    const payload = {
+      user_id: currentAuthUserId,
+      code: codeVal
+    };
+    const savedRef = localStorage.getItem('glock_ref_id');
+    if (savedRef) {
+      payload.referrer_id = savedRef;
+    }
+
+    const res = await fetch('/api/auth/verify_code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Неверный код подтверждения', 'error');
+      if (otpInput) {
+        otpInput.select();
+      }
+      return;
+    }
+
+    state.user = data.user;
+    renderAuthContainer();
+    closeModal('loginModal');
+
+    const dispName = data.user.username ? `@${data.user.username}` : (data.user.first_name || `ID ${data.user.id}`);
+    showToast(`Добро пожаловать, ${dispName}! 🎉`, 'success');
+
+    if (state.selectedProduct) {
+      openProductModal(state.selectedProduct.id);
+    }
+
+  } catch (err) {
+    console.error('Ошибка проверки кода:', err);
+    showToast('Ошибка проверки кода. Попробуйте еще раз', 'error');
+  } finally {
+    if (btnVerify) {
+      btnVerify.disabled = false;
+      btnVerify.innerHTML = 'Подтвердить и войти 🔑';
+    }
+  }
+}
+
+// Альтернативный способ: Вход в 1 клик через бота
 async function startBotAuthFlow() {
   const btnAuth = document.getElementById('btnAuthViaBot');
   const waitingEl = document.getElementById('botAuthWaiting');
@@ -1019,43 +1219,6 @@ async function startBotAuthFlow() {
     showToast(err.message || 'Ошибка входа через бота', 'error');
     if (btnAuth) btnAuth.disabled = false;
     if (waitingEl) waitingEl.style.display = 'none';
-  }
-}
-
-// Способ 2: Вход по Telegram @username или ID
-async function handleIdentifierLogin() {
-  const input = document.getElementById('loginIdentifier');
-  const rawVal = input ? input.value.trim() : '';
-  if (!rawVal) {
-    showToast('Введите ваш @username или ID', 'warning');
-    if (input) input.focus();
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/auth/identifier', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: rawVal })
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) {
-      showToast(data.error || 'Пользователь с таким ником или ID не найден', 'error');
-      return;
-    }
-
-    state.user = data.user;
-    renderAuthContainer();
-    closeModal('loginModal');
-    const dispName = data.user.username ? `@${data.user.username}` : (data.user.first_name || `ID ${data.user.id}`);
-    showToast(`Успешный вход под ${dispName}!`, 'success');
-
-    if (state.selectedProduct) {
-      openProductModal(state.selectedProduct.id);
-    }
-  } catch (err) {
-    console.error('Ошибка входа по нику/ID:', err);
-    showToast('Ошибка при проверке пользователя', 'error');
   }
 }
 
@@ -1159,6 +1322,10 @@ function closeModal(modalId) {
     if (botAuthPollTimer) {
       clearInterval(botAuthPollTimer);
       botAuthPollTimer = null;
+    }
+    if (resendCountdownTimer) {
+      clearInterval(resendCountdownTimer);
+      resendCountdownTimer = null;
     }
   }
 }

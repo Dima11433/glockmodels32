@@ -369,6 +369,163 @@ async def handle_auth_identifier(request: web.Request):
             "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
         }
     })
+async def send_telegram_direct_message(chat_id: int, text: str) -> bool:
+    """Прямая отправка сообщения через Telegram Bot API без запущенного bot.py."""
+    url = f"https://api.telegram.org/bot{config.bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                data = await resp.json()
+                return bool(data.get("ok"))
+    except Exception as e:
+        logger.error(f"Ошибка отправки Telegram сообщения: {e}")
+        return False
+
+
+async def handle_auth_send_code(request: web.Request):
+    """Генерирует 6-значный код и отправляет его пользователю в Telegram."""
+    try:
+        data = await request.json()
+        raw_ident = str(data.get("identifier", "")).strip()
+    except Exception:
+        return web.json_response({"error": "Укажите username или Telegram ID"}, status=400)
+
+    if not raw_ident:
+        return web.json_response({"error": "Введите ваш никнейм или Telegram ID"}, status=400)
+
+    ident = raw_ident.lstrip("@").strip()
+    user_row = None
+
+    if ident.isdigit():
+        cur = await db.conn.execute("SELECT id, username, balance FROM users WHERE id = ?", (int(ident),))
+        user_row = await cur.fetchone()
+
+    if not user_row:
+        cur = await db.conn.execute("SELECT id, username, balance FROM users WHERE LOWER(username) = LOWER(?)", (ident,))
+        user_row = await cur.fetchone()
+
+    if not user_row:
+        if ident.isdigit():
+            user_id = int(ident)
+            user = await db.get_or_create_user(user_id, f"user_{user_id}")
+            user_row = (user["id"], user["username"], user["balance"])
+        else:
+            bot_name = config.bot_username or "glock_models_bot"
+            return web.json_response({
+                "error": f"Пользователь @{ident} не найден в базе магазина. Сначала откройте бота @{bot_name} и нажмите /start!"
+            }, status=404)
+
+    user_id = user_row[0]
+    username = user_row[1] or str(user_id)
+
+    # 6-значный цифровой код
+    import secrets
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
+    now = time.time()
+
+    await db.conn.execute("""
+        INSERT INTO site_otp_codes (user_id, username, code, created_at, attempts)
+        VALUES (?, ?, ?, ?, 0)
+        ON CONFLICT(user_id) DO UPDATE SET
+            code = excluded.code,
+            created_at = excluded.created_at,
+            attempts = 0
+    """, (user_id, username, otp_code, now))
+    await db.conn.commit()
+
+    bot_name = config.bot_username or "glock_models_bot"
+    text = (
+        "🔐 <b>Код авторизации на сайте GLOCK SHOP:</b>\n\n"
+        f"👉 <code>{otp_code}</code> 👈\n\n"
+        "⏳ <b>Код действует 5 минут.</b> Введите его на сайте для входа в ваш профиль.\n"
+        "⚠️ Если вы не запрашивали вход, просто проигнорируйте это сообщение."
+    )
+    sent = await send_telegram_direct_message(user_id, text)
+    if not sent:
+        return web.json_response({
+            "error": f"Бот не смог отправить сообщение пользователю @{username}. Убедитесь, что вы не заблокировали @{bot_name} в Telegram, и напишите боту /start!"
+        }, status=400)
+
+    return web.json_response({
+        "status": "ok",
+        "user_id": user_id,
+        "username": username,
+        "message": f"Код отправлен в Telegram пользователю @{username}"
+    })
+
+
+async def handle_auth_verify_code(request: web.Request):
+    """Проверяет введенный 6-значный код и авторизует пользователя."""
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id", 0))
+        code = str(data.get("code", "")).strip()
+    except Exception:
+        return web.json_response({"error": "Некорректные параметры"}, status=400)
+
+    if not user_id or not code:
+        return web.json_response({"error": "Введите 6-значный код из Telegram"}, status=400)
+
+    cur = await db.conn.execute("SELECT code, created_at, attempts FROM site_otp_codes WHERE user_id = ?", (user_id,))
+    row = await cur.fetchone()
+    if not row:
+        return web.json_response({"error": "Код не найден или устарел. Запросите новый код"}, status=400)
+
+    saved_code, created_at, attempts = row
+    if time.time() - created_at > 300:
+        await db.conn.execute("DELETE FROM site_otp_codes WHERE user_id = ?", (user_id,))
+        await db.conn.commit()
+        return web.json_response({"error": "Срок действия кода истек (5 минут). Запросите код заново"}, status=400)
+
+    if attempts >= 5:
+        await db.conn.execute("DELETE FROM site_otp_codes WHERE user_id = ?", (user_id,))
+        await db.conn.commit()
+        return web.json_response({"error": "Слишком много неверных попыток. Запросите новый код"}, status=400)
+
+    if saved_code != code:
+        await db.conn.execute("UPDATE site_otp_codes SET attempts = attempts + 1 WHERE user_id = ?", (user_id,))
+        await db.conn.commit()
+        rem = 4 - attempts
+        return web.json_response({"error": f"Неверный код подтверждения! Осталось попыток: {max(0, rem)}"}, status=400)
+
+    # Успешная проверка!
+    await db.conn.execute("DELETE FROM site_otp_codes WHERE user_id = ?", (user_id,))
+    await db.conn.commit()
+
+    user = await db.get_user(user_id)
+    if not user:
+        user = await db.get_or_create_user(user_id, f"user_{user_id}")
+
+    # Привязка реферала
+    ref_id = data.get("referrer_id")
+    if ref_id and not user["referrer_id"]:
+        try:
+            r_int = int(ref_id)
+            if r_int != user_id:
+                await db.conn.execute("UPDATE users SET referrer_id = ? WHERE id = ?", (r_int, user_id))
+                await db.conn.commit()
+        except Exception:
+            pass
+
+    token = generate_session_token(user_id)
+    SESSIONS[token]["username"] = user["username"]
+
+    response = web.json_response({
+        "status": "ok",
+        "token": token,
+        "user": {
+            "id": user_id,
+            "username": user["username"],
+            "balance_cents": user["balance"],
+            "balance_usd": f"${user['balance'] / 100:.2f}",
+            "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+        }
+    })
     response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
     return response
 
@@ -842,6 +999,15 @@ async def on_startup(app: web.Application):
             created_at REAL
         )
     """)
+    await db.conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_otp_codes (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            code TEXT,
+            created_at REAL,
+            attempts INTEGER DEFAULT 0
+        )
+    """)
     await db.conn.commit()
     try:
         get_payments()
@@ -872,6 +1038,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/product/{id}", handle_product_detail)
 
     # Авторизация
+    app.router.add_post("/api/auth/send_code", handle_auth_send_code)
+    app.router.add_post("/api/auth/verify_code", handle_auth_verify_code)
     app.router.add_post("/api/auth/identifier", handle_auth_identifier)
     app.router.add_post("/api/auth/bot_create", handle_auth_bot_create)
     app.router.add_get("/api/auth/bot_poll/{token}", handle_auth_bot_poll)
