@@ -40,7 +40,7 @@ def get_payments() -> Payments:
 TON_WALLET_ADDRESS = os.getenv("TON_WALLET_ADDRESS", "").strip() or "UQDFu-8iB6e7M3qN5J_kU7T2Y4v1Xz9P8O0W-aBcDeFgHiJk"
 TON_USD_RATE = float(os.getenv("TON_USD_RATE", "5.50"))  # Ориентировочный курс TON к USD
 
-# Хранилище сессий в памяти (token -> user_id)
+# Хранилище сессий (token -> {user_id, username, created_at})
 SESSIONS: dict[str, dict] = {}
 # Временное хранилище инвойсов Tonkeeper (topup_id -> dict)
 TONKEEPER_ORDERS: dict[str, dict] = {}
@@ -56,15 +56,40 @@ def generate_session_token(user_id: int) -> str:
     return token
 
 
-def get_user_id_from_request(request: web.Request) -> int | None:
-    # 1. Из Cookie
-    token = request.cookies.get("session_token")
-    # 2. Из заголовка Authorization
-    if not token and "Authorization" in request.headers:
-        auth_header = request.headers["Authorization"]
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:].strip()
+async def save_session_db(token: str, user_id: int, username: str):
+    """Сохраняет сессию в память и в постоянную таблицу SQLite site_sessions."""
+    now = time.time()
+    SESSIONS[token] = {"user_id": user_id, "username": username, "created_at": now}
+    try:
+        await db.conn.execute(
+            "INSERT OR REPLACE INTO site_sessions (token, user_id, username, created_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, username, now)
+        )
+        await db.conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения сессии в БД: {e}")
 
+
+def get_token_from_request(request: web.Request) -> str | None:
+    """Извлекает токен авторизации из Authorization header, query-параметров или Cookie."""
+    # 1. Заголовок Authorization: Bearer <token>
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:].strip()
+    # 2. Query param ?session_token=... или ?token=...
+    if "session_token" in request.query:
+        return request.query["session_token"].strip()
+    if "token" in request.query:
+        return request.query["token"].strip()
+    # 3. Cookie session_token
+    token = request.cookies.get("session_token")
+    if token:
+        return token.strip()
+    return None
+
+
+def get_user_id_from_request(request: web.Request) -> int | None:
+    token = get_token_from_request(request)
     if token and token in SESSIONS:
         return SESSIONS[token]["user_id"]
     return None
@@ -286,6 +311,7 @@ async def handle_auth_telegram(request: web.Request):
 
     # Создаем сессию
     token = generate_session_token(user_id)
+    await save_session_db(token, user_id, username)
     SESSIONS[token]["username"] = username
     SESSIONS[token]["first_name"] = first_name
     SESSIONS[token]["photo_url"] = photo_url
@@ -356,6 +382,7 @@ async def handle_auth_identifier(request: web.Request):
             pass
 
     token = generate_session_token(user_id)
+    await save_session_db(token, user_id, user["username"])
     SESSIONS[token]["username"] = user["username"]
 
     response = web.json_response({
@@ -517,7 +544,7 @@ async def handle_auth_verify_code(request: web.Request):
             pass
 
     token = generate_session_token(user_id)
-    SESSIONS[token]["username"] = user["username"]
+    await save_session_db(token, user_id, user["username"])
 
     response = web.json_response({
         "status": "ok",
@@ -569,7 +596,7 @@ async def handle_auth_bot_poll(request: web.Request):
 
     user = await db.get_or_create_user(user_id, username)
     session_token = generate_session_token(user_id)
-    SESSIONS[session_token]["username"] = username
+    await save_session_db(session_token, user_id, username)
     SESSIONS[session_token]["first_name"] = first_name
 
     response = web.json_response({
@@ -602,6 +629,7 @@ async def handle_auth_demo(request: web.Request):
 
     user = await db.get_or_create_user(user_id, f"user_{user_id}")
     token = generate_session_token(user_id)
+    await save_session_db(token, user_id, user["username"])
     response = web.json_response({
         "status": "ok",
         "token": token,
@@ -619,9 +647,15 @@ async def handle_auth_demo(request: web.Request):
 
 
 async def handle_auth_logout(request: web.Request):
-    token = request.cookies.get("session_token")
-    if token and token in SESSIONS:
-        del SESSIONS[token]
+    token = get_token_from_request(request)
+    if token:
+        if token in SESSIONS:
+            del SESSIONS[token]
+        try:
+            await db.conn.execute("DELETE FROM site_sessions WHERE token = ?", (token,))
+            await db.conn.commit()
+        except Exception:
+            pass
     response = web.json_response({"status": "ok"})
     response.del_cookie("session_token")
     return response
@@ -1012,7 +1046,27 @@ async def on_startup(app: web.Application):
             attempts INTEGER DEFAULT 0
         )
     """)
+    await db.conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER,
+            username TEXT,
+            created_at REAL
+        )
+    """)
     await db.conn.commit()
+
+    # Загружаем сохраненные сессии из БД в память
+    try:
+        cur = await db.conn.execute("SELECT token, user_id, username, created_at FROM site_sessions")
+        loaded_cnt = 0
+        for row in await cur.fetchall():
+            SESSIONS[row[0]] = {"user_id": row[1], "username": row[2], "created_at": row[3]}
+            loaded_cnt += 1
+        logger.info(f"Восстановлено {loaded_cnt} активных сессий пользователей из БД.")
+    except Exception as e:
+        logger.warning(f"Ошибка загрузки сессий: {e}")
+
     try:
         get_payments()
     except Exception as e:

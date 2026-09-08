@@ -35,6 +35,34 @@ const state = {
 };
 
 // ==========================================
+// УПРАВЛЕНИЕ ТОКЕНАМИ И АВТОРИЗАЦИЕЙ (SESSION)
+// ==========================================
+
+function getAuthToken() {
+  return localStorage.getItem('glock_session_token') || '';
+}
+
+function setAuthToken(token) {
+  if (token) {
+    localStorage.setItem('glock_session_token', token);
+  } else {
+    localStorage.removeItem('glock_session_token');
+  }
+}
+
+async function apiFetch(url, options = {}) {
+  const opts = { ...options };
+  const headers = { ...(opts.headers || {}) };
+  const token = getAuthToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  opts.headers = headers;
+  opts.credentials = 'include';
+  return fetch(url, opts);
+}
+
+// ==========================================
 // ИНИЦИАЛИЗАЦИЯ
 // ==========================================
 
@@ -54,7 +82,7 @@ async function initApp() {
   // 2. Устанавливаем валюту в UI
   applyCurrencyButtons();
 
-  // 3. Загружаем системные параметры и пользователя
+  // 3. Загружаем системные параметры и пользователя (с автовосстановлением сессии)
   await loadInitData();
 
   // 4. Загружаем каталог товаров
@@ -64,10 +92,12 @@ async function initApp() {
   window.onTelegramAuth = handleTelegramAuthCallback;
 }
 
-// Загрузка начальных параметров магазина
+// Загрузка начальных параметров магазина и сессии
 async function loadInitData() {
   try {
-    const res = await fetch('/api/init');
+    const token = getAuthToken();
+    const initUrl = token ? `/api/init?session_token=${encodeURIComponent(token)}` : '/api/init';
+    const res = await apiFetch(initUrl);
     if (!res.ok) throw new Error('Ошибка связи с сервером');
     const data = await res.json();
     
@@ -81,9 +111,14 @@ async function loadInitData() {
     const titleEl = document.getElementById('shopTitle');
     if (titleEl) titleEl.innerText = state.config.shop_title;
 
-    // Если пользователь авторизован — обновляем состояние
+    // Если пользователь авторизован — обновляем состояние и профиль
     if (data.user) {
       state.user = data.user;
+      refreshUserProfile().catch(console.warn);
+    } else if (token) {
+      // Если токен был сохранен, но сервер его не распознал (сброс сессии)
+      setAuthToken(null);
+      state.user = null;
     }
     renderAuthContainer();
 
@@ -100,7 +135,7 @@ async function loadInitData() {
 async function loadCatalog() {
   const grid = document.getElementById('productsGrid');
   try {
-    const res = await fetch('/api/catalog');
+    const res = await apiFetch('/api/catalog');
     if (!res.ok) throw new Error('Не удалось загрузить каталог');
     const data = await res.json();
 
@@ -456,7 +491,7 @@ async function buyCurrentProduct() {
   }
 
   try {
-    const res = await fetch('/api/buy/balance', {
+    const res = await apiFetch('/api/buy/balance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ product_id: prod.id })
@@ -623,7 +658,7 @@ async function createCryptoInvoice() {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch('/api/pay/cryptobot/create', {
+    const res = await apiFetch('/api/pay/cryptobot/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount_usd: state.topupAmount })
@@ -661,7 +696,7 @@ function startCryptoPolling(invoiceId) {
 
   state.cryptoPollTimer = setInterval(async () => {
     try {
-      const res = await fetch(`/api/pay/cryptobot/status/${invoiceId}`);
+      const res = await apiFetch(`/api/pay/cryptobot/status/${invoiceId}`);
       if (!res.ok) return;
       const data = await res.json();
 
@@ -703,7 +738,7 @@ async function createTonkeeperInvoice() {
   if (qrContainer) qrContainer.innerHTML = '<div class="spinner-small"></div>';
 
   try {
-    const res = await fetch('/api/pay/tonkeeper/create', {
+    const res = await apiFetch('/api/pay/tonkeeper/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount_usd: state.topupAmount })
@@ -755,7 +790,7 @@ async function checkTonkeeperPayment() {
   }
 
   try {
-    const res = await fetch('/api/pay/tonkeeper/check', {
+    const res = await apiFetch('/api/pay/tonkeeper/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ topup_id: state.activeTonkeeperId })
@@ -798,9 +833,10 @@ async function openProfileModal() {
 
 async function refreshUserProfile() {
   try {
-    const res = await fetch('/api/user/me');
+    const res = await apiFetch('/api/user/me');
     if (!res.ok) {
       if (res.status === 401) {
+        setAuthToken(null);
         state.user = null;
         renderAuthContainer();
       }
@@ -916,10 +952,11 @@ function renderAuthContainer() {
 
 async function logout() {
   try {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await apiFetch('/api/auth/logout', { method: 'POST' });
   } catch (e) {
     console.warn(e);
   }
+  setAuthToken(null);
   state.user = null;
   renderAuthContainer();
   closeModal('profileModal');
@@ -1001,7 +1038,7 @@ async function handleSendCode() {
       btnSend.innerHTML = '<div class="spinner-small"></div> Отправка кода в Telegram...';
     }
 
-    const res = await fetch('/api/auth/send_code', {
+    const res = await apiFetch('/api/auth/send_code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier: rawVal })
@@ -1113,7 +1150,7 @@ async function handleVerifyCode() {
       payload.referrer_id = savedRef;
     }
 
-    const res = await fetch('/api/auth/verify_code', {
+    const res = await apiFetch('/api/auth/verify_code', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -1128,8 +1165,12 @@ async function handleVerifyCode() {
       return;
     }
 
+    if (data.token) {
+      setAuthToken(data.token);
+    }
     state.user = data.user;
     renderAuthContainer();
+    refreshUserProfile().catch(console.warn);
     closeModal('loginModal');
 
     const dispName = data.user.username ? `@${data.user.username}` : (data.user.first_name || `ID ${data.user.id}`);
@@ -1161,7 +1202,7 @@ async function startBotAuthFlow() {
     if (waitingEl) waitingEl.style.display = 'flex';
     if (statusText) statusText.innerText = 'Создание сессии входа...';
 
-    const res = await fetch('/api/auth/bot_create', { method: 'POST' });
+    const res = await apiFetch('/api/auth/bot_create', { method: 'POST' });
     const data = await res.json();
     if (!res.ok || !data.token) {
       throw new Error(data.error || 'Не удалось создать токен авторизации');
@@ -1191,7 +1232,7 @@ async function startBotAuthFlow() {
       }
 
       try {
-        const pollRes = await fetch(`/api/auth/bot_poll/${data.token}`);
+        const pollRes = await apiFetch(`/api/auth/bot_poll/${data.token}`);
         const pollData = await pollRes.json();
         if (pollData.status === 'confirmed' && pollData.user) {
           clearInterval(botAuthPollTimer);
@@ -1199,8 +1240,12 @@ async function startBotAuthFlow() {
           if (waitingEl) waitingEl.style.display = 'none';
           if (btnAuth) btnAuth.disabled = false;
 
+          if (pollData.token) {
+            setAuthToken(pollData.token);
+          }
           state.user = pollData.user;
           renderAuthContainer();
+          refreshUserProfile().catch(console.warn);
           closeModal('loginModal');
           const dispName = pollData.user.username ? `@${pollData.user.username}` : (pollData.user.first_name || `ID ${pollData.user.id}`);
           showToast(`Добро пожаловать, ${dispName}!`, 'success');
@@ -1231,7 +1276,7 @@ async function handleTelegramAuthCallback(user) {
       payload.referrer_id = savedRef;
     }
 
-    const res = await fetch('/api/auth/telegram', {
+    const res = await apiFetch('/api/auth/telegram', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -1243,8 +1288,12 @@ async function handleTelegramAuthCallback(user) {
       return;
     }
 
+    if (data.token) {
+      setAuthToken(data.token);
+    }
     state.user = data.user;
     renderAuthContainer();
+    refreshUserProfile().catch(console.warn);
     closeModal('loginModal');
     showToast(`Добро пожаловать, ${data.user.username ? '@' + data.user.username : data.user.first_name}!`, 'success');
 
