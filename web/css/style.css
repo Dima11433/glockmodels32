@@ -446,6 +446,44 @@ body {
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
 }
 
+.subcategories-scroller {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 12px 0 4px 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  margin-top: 12px;
+}
+
+.subcat-pill {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.subcat-pill:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.subcat-pill.active {
+  background: rgba(0, 242, 254, 0.15);
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 2px 8px rgba(0, 242, 254, 0.25);
+}
+
 /* ================= PRODUCT GRID ================= */
 .products-grid {
   display: grid;
@@ -537,6 +575,12 @@ body {
   background: rgba(16, 185, 129, 0.92);
   color: #fff;
   box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);
+}
+
+.badge-pack {
+  background: rgba(99, 102, 241, 0.92);
+  color: #fff;
+  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3);
 }
 
 .badge-out {

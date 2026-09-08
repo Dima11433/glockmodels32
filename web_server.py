@@ -152,8 +152,9 @@ async def handle_init(request: web.Request):
 async def handle_catalog(request: web.Request):
     """Возвращает категории и товары со всеми фотографиями и ценами."""
     try:
-        cur = await db.conn.execute("SELECT id, name, description, position FROM categories ORDER BY position, id")
+        cur = await db.conn.execute("SELECT id, name, description, position, parent_id FROM categories ORDER BY position, id")
         categories = [dict(r) for r in await cur.fetchall()]
+        cat_map = {c["id"]: c for c in categories}
 
         cur = await db.conn.execute(
             "SELECT id, category_id, name, description, price, old_price, kind, content_type, visible "
@@ -202,6 +203,9 @@ async def handle_catalog(request: web.Request):
                 in_stock = True
                 stock_count = 999
 
+            cat_info = cat_map.get(p["category_id"], {})
+            p["category_name"] = cat_info.get("name", "")
+            p["parent_category_id"] = cat_info.get("parent_id")
             p["photos"] = photos
             p["price_cents"] = price_cents
             p["price_usd"] = f"${price_cents / 100:.2f}"

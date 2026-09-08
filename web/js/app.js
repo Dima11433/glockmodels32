@@ -14,6 +14,7 @@
 const state = {
   currency: localStorage.getItem('glock_currency') || 'USD',
   activeCategory: null,
+  activeSubcategory: null,
   searchQuery: '',
   categories: [],
   products: [],
@@ -134,20 +135,26 @@ function renderCategories() {
   const totalProds = state.products.length;
   let html = `
     <button class="cat-pill ${state.activeCategory === null ? 'active' : ''}" onclick="selectCategory(null)">
-      <span>🔥 Все разделы</span>
+      <span>🔥 Все паки</span>
       <span class="cat-count">${totalProds}</span>
     </button>
   `;
 
-  state.categories.forEach(cat => {
-    const count = state.products.filter(p => p.category_id === cat.id).length;
-    const isActive = state.activeCategory === cat.id ? 'active' : '';
-    html += `
-      <button class="cat-pill ${isActive}" onclick="selectCategory(${cat.id})">
-        <span>${escapeHtml(cat.name)}</span>
-        <span class="cat-count">${count}</span>
-      </button>
-    `;
+  // Показываем только основные (корневые) разделы: parent_id == null
+  const parentCats = state.categories.filter(c => !c.parent_id);
+
+  parentCats.forEach(cat => {
+    // Считаем товары этой категории + всех её вложенных подкатегорий
+    const count = state.products.filter(p => p.category_id === cat.id || p.parent_category_id === cat.id).length;
+    if (count > 0) {
+      const isActive = state.activeCategory === cat.id ? 'active' : '';
+      html += `
+        <button class="cat-pill ${isActive}" onclick="selectCategory(${cat.id})">
+          <span>${escapeHtml(cat.name)}</span>
+          <span class="cat-count">${count}</span>
+        </button>
+      `;
+    }
   });
 
   container.innerHTML = html;
@@ -155,19 +162,71 @@ function renderCategories() {
 
 function selectCategory(catId) {
   state.activeCategory = catId;
-  
+  state.activeSubcategory = null; // Сброс выбранной подкатегории
+
   // Обновляем заголовок раздела
   const titleEl = document.getElementById('currentCategoryTitle');
   if (titleEl) {
     if (catId === null) {
-      titleEl.innerText = 'Все товары каталога';
+      titleEl.innerText = 'Все доступные паки моделей';
     } else {
       const cat = state.categories.find(c => c.id === catId);
-      titleEl.innerText = cat ? cat.name : 'Товары';
+      titleEl.innerText = cat ? `Раздел: ${cat.name}` : 'Каталог';
     }
   }
 
   renderCategories();
+  renderSubcategories();
+  renderProducts();
+}
+
+function renderSubcategories() {
+  const subContainer = document.getElementById('subcategoriesList');
+  if (!subContainer) return;
+
+  if (state.activeCategory === null) {
+    subContainer.style.display = 'none';
+    subContainer.innerHTML = '';
+    return;
+  }
+
+  // Ищем подкатегории для текущей выбранной категории (где parent_id == activeCategory)
+  const subcats = state.categories.filter(c => c.parent_id === state.activeCategory);
+
+  if (subcats.length === 0) {
+    subContainer.style.display = 'none';
+    subContainer.innerHTML = '';
+    return;
+  }
+
+  const parentCat = state.categories.find(c => c.id === state.activeCategory);
+  const totalCount = state.products.filter(p => p.category_id === state.activeCategory || p.parent_category_id === state.activeCategory).length;
+
+  let html = `
+    <button class="subcat-pill ${state.activeSubcategory === null ? 'active' : ''}" onclick="selectSubcategory(null)">
+      <span>💎 Все паки (${totalCount})</span>
+    </button>
+  `;
+
+  subcats.forEach(sc => {
+    const scCount = state.products.filter(p => p.category_id === sc.id).length;
+    if (scCount > 0) {
+      const isActive = state.activeSubcategory === sc.id ? 'active' : '';
+      html += `
+        <button class="subcat-pill ${isActive}" onclick="selectSubcategory(${sc.id})">
+          <span>📦 ${escapeHtml(sc.name)} (${scCount})</span>
+        </button>
+      `;
+    }
+  });
+
+  subContainer.innerHTML = html;
+  subContainer.style.display = 'flex';
+}
+
+function selectSubcategory(subcatId) {
+  state.activeSubcategory = subcatId;
+  renderSubcategories();
   renderProducts();
 }
 
@@ -184,9 +243,11 @@ function renderProducts() {
 
   let filtered = state.products;
 
-  // Фильтр по категории
-  if (state.activeCategory !== null) {
-    filtered = filtered.filter(p => p.category_id === state.activeCategory);
+  // Фильтр по категории / подкатегории
+  if (state.activeSubcategory !== null) {
+    filtered = filtered.filter(p => p.category_id === state.activeSubcategory);
+  } else if (state.activeCategory !== null) {
+    filtered = filtered.filter(p => p.category_id === state.activeCategory || p.parent_category_id === state.activeCategory);
   }
 
   // Фильтр по поисковому запросу
@@ -194,12 +255,13 @@ function renderProducts() {
     filtered = filtered.filter(p => {
       const name = (p.name || '').toLowerCase();
       const desc = (p.description || '').toLowerCase();
-      return name.includes(state.searchQuery) || desc.includes(state.searchQuery);
+      const cat = (p.category_name || '').toLowerCase();
+      return name.includes(state.searchQuery) || desc.includes(state.searchQuery) || cat.includes(state.searchQuery);
     });
   }
 
   if (countBadge) {
-    countBadge.innerText = `${filtered.length} шт.`;
+    countBadge.innerText = `${filtered.length} паков`;
   }
 
   if (filtered.length === 0) {
@@ -207,7 +269,7 @@ function renderProducts() {
       <div class="empty-state">
         <span class="empty-icon">🔍</span>
         <h3>Ничего не найдено</h3>
-        <p>Попробуйте изменить категорию или поисковый запрос</p>
+        <p>Попробуйте выбрать другой раздел или сбросить фильтр</p>
       </div>
     `;
     return;
@@ -229,6 +291,10 @@ function renderProducts() {
       ? '<span class="badge badge-stock">В наличии</span>' 
       : '<span class="badge badge-out">Закончился</span>';
 
+    // Бейдж типа пака
+    const packName = prod.category_name || '';
+    const packBadge = packName ? `<span class="badge badge-pack">${escapeHtml(packName)}</span>` : '';
+
     // Очищаем описание модели от экранированных слэшей и форматируем
     let cleanDesc = (prod.description || '')
       .replace(/\\/g, ' • ')
@@ -242,6 +308,7 @@ function renderProducts() {
         <div class="card-image-wrap">
           <img src="${photo}" alt="${escapeHtml(prod.name)}" loading="lazy" onerror="this.src='/static/img/product_placeholder.png'">
           <div class="card-badges">
+            ${packBadge}
             ${badgeHtml}
             ${stockBadge}
           </div>
