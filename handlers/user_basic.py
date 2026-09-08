@@ -128,7 +128,7 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, stat
                 pass
     # ─────────────────────────────────────────────────────────────────────────
 
-    # ─── Авторизация на веб-сайте через бота /start auth_<token> ───
+    # ─── Авторизация на веб-сайте через бота /start auth_<token> или обычный /start ───
     if command.args and command.args.startswith("auth_"):
         auth_tok = command.args[5:]
         try:
@@ -145,6 +145,28 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, stat
                     parse_mode="HTML"
                 )
                 return
+        except Exception:
+            pass
+    elif not command.args:
+        try:
+            cur = await db.conn.execute(
+                "SELECT token FROM site_auth_tokens WHERE status = 'pending' AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+                (datetime.datetime.now().timestamp() - 300,)
+            )
+            pend_row = await cur.fetchone()
+            if pend_row:
+                pend_token = pend_row[0]
+                await db.conn.execute(
+                    "UPDATE site_auth_tokens SET user_id = ?, username = ?, first_name = ?, status = 'confirmed' WHERE token = ?",
+                    (message.from_user.id, message.from_user.username or "", message.from_user.first_name or "", pend_token)
+                )
+                await db.conn.commit()
+                await message.answer(
+                    "✅ <b>Вход на сайт успешно подтвержден!</b>\n\n"
+                    f"Вы вошли на сайт как <b>@{message.from_user.username or message.from_user.id}</b>.\n"
+                    "Перейдите во вкладку браузера — сайт автоматически откроет ваш профиль! 🚀",
+                    parse_mode="HTML"
+                )
         except Exception:
             pass
 
