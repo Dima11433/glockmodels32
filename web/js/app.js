@@ -229,6 +229,14 @@ function renderProducts() {
       ? '<span class="badge badge-stock">В наличии</span>' 
       : '<span class="badge badge-out">Закончился</span>';
 
+    // Очищаем описание модели от экранированных слэшей и форматируем
+    let cleanDesc = (prod.description || '')
+      .replace(/\\/g, ' • ')
+      .replace(/—/g, ' • ')
+      .replace(/\s*•\s*/g, ' • ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
     return `
       <div class="product-card" onclick="openProductModal(${prod.id})">
         <div class="card-image-wrap">
@@ -237,10 +245,11 @@ function renderProducts() {
             ${badgeHtml}
             ${stockBadge}
           </div>
+          <div class="card-image-overlay"></div>
         </div>
         <div class="card-body">
           <h3 class="card-title">${escapeHtml(prod.name)}</h3>
-          <p class="card-desc">${escapeHtml(truncate(prod.description, 75))}</p>
+          <p class="card-desc" title="${escapeAttr(cleanDesc)}">${escapeHtml(cleanDesc)}</p>
           <div class="card-footer">
             <div class="price-box">
               <span class="price-current">${priceStr}</span>
