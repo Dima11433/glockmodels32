@@ -27,3 +27,6 @@ tests/
 # Временные файлы
 *.log
 __MACOSX/
+
+cloudflared.exe
+
