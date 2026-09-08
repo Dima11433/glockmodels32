@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GLOCK SHOP — Официальный магазин моделей</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <!-- QRCode.js для генерации QR кодов Tonkeeper -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+
+  <!-- ВЕРХНЯЯ НАВИГАЦИОННАЯ ПАНЕЛЬ -->
+  <header class="site-header">
+    <div class="header-container">
+      <div class="logo-area" onclick="location.reload()">
+        <span class="logo-icon">⚡</span>
+        <div class="logo-text">
+          <span class="brand-title" id="shopTitle">GLOCK SHOP</span>
+          <span class="brand-subtitle">STORE & MODELS</span>
+        </div>
+      </div>
+
+      <!-- Поиск по каталогу -->
+      <div class="search-area">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInput" placeholder="Поиск товаров и моделей..." oninput="handleSearch()">
+      </div>
+
+      <!-- Правая панель (Валюта + Профиль) -->
+      <div class="header-actions">
+        <!-- Переключатель валюты -->
+        <div class="currency-toggle" title="Сменить валюту">
+          <button class="curr-btn active" id="btnUSD" onclick="setCurrency('USD')">USD ($)</button>
+          <button class="curr-btn" id="btnRUB" onclick="setCurrency('RUB')">RUB (₽)</button>
+        </div>
+
+        <!-- Кнопка входа или профиль пользователя -->
+        <div id="authContainer">
+          <button class="btn btn-primary btn-login" onclick="openLoginModal()">
+            <span class="tg-icon">✈️</span> Войти через Telegram
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ОСНОВНОЙ КОНТЕНТ -->
+  <main class="main-container">
+    
+    <!-- Hero промо-баннер -->
+    <section class="hero-banner">
+      <div class="hero-content">
+        <span class="hero-badge">🔥 ОФИЦИАЛЬНАЯ ПЛАТФОРМА</span>
+        <h1 class="hero-title">Магазин цифровых товаров и моделей</h1>
+        <p class="hero-subtitle">Мгновенная доставка товаров, единый баланс с Telegram-ботом и оплата через Tonkeeper & CryptoBot</p>
+        <div class="hero-stats">
+          <div class="stat-item"><span class="stat-val" id="totalCatsCount">17</span><span class="stat-lbl">Категорий</span></div>
+          <div class="stat-item"><span class="stat-val" id="totalProdsCount">46</span><span class="stat-lbl">Товаров</span></div>
+          <div class="stat-item"><span class="stat-val">24/7</span><span class="stat-lbl">Доставка</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Категории товаров -->
+    <section class="categories-section">
+      <div class="section-header">
+        <h2 class="section-title">📁 Разделы магазина</h2>
+      </div>
+      <div class="categories-scroller" id="categoriesList">
+        <button class="cat-pill active" onclick="selectCategory(null)">
+          <span>🔥 Все товары</span>
+        </button>
+        <!-- Категории подгружаются динамически -->
+      </div>
+    </section>
+
+    <!-- Сетка товаров -->
+    <section class="products-section">
+      <div class="section-header">
+        <h2 class="section-title" id="currentCategoryTitle">Товары каталога</h2>
+        <span class="counter-badge" id="visibleProductsCount">Загрузка...</span>
+      </div>
+
+      <div class="products-grid" id="productsGrid">
+        <!-- Карточки товаров подгружаются динамически -->
+        <div class="loader-placeholder">
+          <div class="spinner"></div>
+          <p>Загрузка каталога...</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ПОДВАЛ -->
+  <footer class="site-footer">
+    <div class="footer-container">
+      <div class="footer-col">
+        <div class="logo-area">
+          <span class="logo-icon">⚡</span>
+          <span class="brand-title">GLOCK SHOP</span>
+        </div>
+        <p class="footer-desc">Автономная веб-платформа с синхронизацией товаров и единым балансом с Telegram-ботом.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Оплата</h4>
+        <div class="payment-badges">
+          <span class="pay-badge">💎 Tonkeeper (TON)</span>
+          <span class="pay-badge">🤖 CryptoBot (USDT)</span>
+          <span class="pay-badge">👛 Баланс магазина</span>
+        </div>
+      </div>
+      <div class="footer-col">
+        <h4>Поддержка</h4>
+        <a href="https://t.me/glock_admin_bot" target="_blank" class="footer-link">💬 Техподдержка 24/7</a>
+        <a href="https://t.me/news_glock_shop" target="_blank" class="footer-link">📰 Новостной канал</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 GLOCK SHOP. Все права защищены. Работает автономно.</p>
+    </div>
+  </footer>
+
+  <!-- ================= МОДАЛЬНЫЕ ОКНА ================= -->
+
+  <!-- Модальное окно товара -->
+  <div class="modal-overlay" id="productModal" onclick="closeModalOnOverlay(event, 'productModal')">
+    <div class="modal-card modal-product">
+      <button class="modal-close" onclick="closeModal('productModal')">✕</button>
+      <div class="prod-modal-grid">
+        <div class="prod-modal-gallery">
+          <img id="modalProductImg" src="/static/img/product_placeholder.png" alt="Товар">
+        </div>
+        <div class="prod-modal-info">
+          <div class="prod-modal-badges" id="modalBadges"></div>
+          <h3 class="prod-modal-title" id="modalTitle">Название товара</h3>
+          <div class="prod-modal-price-row">
+            <span class="prod-modal-price" id="modalPrice">$0.00</span>
+            <span class="prod-modal-old-price" id="modalOldPrice"></span>
+          </div>
+          <div class="prod-modal-desc" id="modalDesc">Описание товара...</div>
+          <div class="prod-modal-stock" id="modalStock">В наличии</div>
+
+          <div class="prod-modal-actions">
+            <button class="btn btn-primary btn-block" id="btnBuyBalance" onclick="buyCurrentProduct()">
+              💳 Купить с баланса
+            </button>
+            <div class="direct-pay-row">
+              <button class="btn btn-crypto" onclick="startDirectCryptoPay()">
+                🤖 CryptoBot
+              </button>
+              <button class="btn btn-ton" onclick="startDirectTonkeeperPay()">
+                💎 Tonkeeper
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно пополнения баланса -->
+  <div class="modal-overlay" id="topupModal" onclick="closeModalOnOverlay(event, 'topupModal')">
+    <div class="modal-card modal-topup">
+      <button class="modal-close" onclick="closeModal('topupModal')">✕</button>
+      <h3 class="modal-heading">➕ Пополнение баланса</h3>
+      <p class="modal-subheading">Средства зачисляются мгновенно и доступны на сайте и в Telegram-боте</p>
+
+      <!-- Выбор суммы -->
+      <div class="amount-picker">
+        <label class="form-label">Выберите или введите сумму ($ USD):</label>
+        <div class="amount-presets">
+          <button class="preset-btn" onclick="setTopupAmount(1)">$1</button>
+          <button class="preset-btn active" onclick="setTopupAmount(5)">$5</button>
+          <button class="preset-btn" onclick="setTopupAmount(10)">$10</button>
+          <button class="preset-btn" onclick="setTopupAmount(25)">$25</button>
+          <button class="preset-btn" onclick="setTopupAmount(50)">$50</button>
+        </div>
+        <div class="amount-input-box">
+          <span class="curr-sign">$</span>
+          <input type="number" id="topupAmountInput" min="0.5" step="0.5" value="5.00" oninput="updateConvertedAmounts()">
+          <span class="converted-rub" id="convertedRubPreview">≈ 450 ₽</span>
+        </div>
+      </div>
+
+      <!-- Вкладки способов оплаты -->
+      <div class="pay-tabs">
+        <button class="pay-tab active" id="tabCryptoBot" onclick="switchPayMethod('cryptobot')">
+          <span>🤖 CryptoBot</span>
+          <small>USDT, BTC, TON, TRX</small>
+        </button>
+        <button class="pay-tab" id="tabTonkeeper" onclick="switchPayMethod('tonkeeper')">
+          <span>💎 Tonkeeper</span>
+          <small>Быстро через TON</small>
+        </button>
+      </div>
+
+      <!-- Блок оплаты CryptoBot -->
+      <div class="pay-content" id="payContentCryptoBot">
+        <p class="pay-hint">Создается официальный счет в Crypto Pay. Оплата проходит прямо в Telegram.</p>
+        <button class="btn btn-primary btn-block btn-lg" id="btnCreateCryptoInvoice" onclick="createCryptoInvoice()">
+          🚀 Создать счет в CryptoBot
+        </button>
+        <div class="invoice-status-box" id="cryptoInvoiceBox" style="display: none;">
+          <div class="spinner-small"></div>
+          <span id="cryptoStatusText">Ожидание подтверждения оплаты...</span>
+          <a href="#" target="_blank" class="btn btn-outline btn-block mt-2" id="btnOpenCryptoBot">
+            Перейти к оплате в @CryptoBot ↗
+          </a>
+        </div>
+      </div>
+
+      <!-- Блок оплаты Tonkeeper -->
+      <div class="pay-content" id="payContentTonkeeper" style="display: none;">
+        <div class="tonkeeper-details">
+          <div class="ton-qr-box" id="tonQrCode"></div>
+          <div class="ton-info-fields">
+            <div class="info-field">
+              <label>Сумма к отправке:</label>
+              <div class="copy-field">
+                <span class="val-highlight" id="tonkeeperAmount">0.91 TON</span>
+                <button class="btn-copy" onclick="copyText('tonkeeperAmount')">Копировать</button>
+              </div>
+            </div>
+            <div class="info-field">
+              <label>Адрес кошелька TON:</label>
+              <div class="copy-field">
+                <span class="val-mono" id="tonkeeperWallet">Загрузка...</span>
+                <button class="btn-copy" onclick="copyText('tonkeeperWallet')">Копировать</button>
+              </div>
+            </div>
+            <div class="info-field">
+              <label>Комментарий к переводу (ОБЯЗАТЕЛЬНО):</label>
+              <div class="copy-field">
+                <span class="val-highlight val-mono" id="tonkeeperComment">TK_...</span>
+                <button class="btn-copy" onclick="copyText('tonkeeperComment')">Копировать</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ton-actions-row">
+          <a href="#" id="btnTonkeeperApp" target="_blank" class="btn btn-ton btn-lg">
+            💎 Открыть в приложении Tonkeeper
+          </a>
+          <button class="btn btn-outline btn-lg" id="btnCheckTonkeeper" onclick="checkTonkeeperPayment()">
+            🔄 Проверить оплату
+          </button>
+        </div>
+        <p class="ton-warning">⚠️ Обязательно укажите комментарий при переводе в Tonkeeper для мгновенного зачисления!</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Модальное окно профиля и рефералов -->
+  <div class="modal-overlay" id="profileModal" onclick="closeModalOnOverlay(event, 'profileModal')">
+    <div class="modal-card modal-profile">
+      <button class="modal-close" onclick="closeModal('profileModal')">✕</button>
+      
+      <div class="profile-header">
+        <div class="profile-avatar" id="profAvatar">👤</div>
+        <div class="profile-info">
+          <h3 class="profile-name" id="profName">Пользователь</h3>
+          <span class="profile-id" id="profId">ID: 000000000</span>
+        </div>
+        <div class="profile-balance-badge">
+          <span class="lbl">Баланс:</span>
+          <span class="val" id="profBalance">$0.00</span>
+          <button class="btn btn-sm btn-primary" onclick="openTopupModal()">+ Пополнить</button>
+        </div>
+      </div>
+
+      <!-- Личная скидка лояльности -->
+      <div class="profile-section loyalty-box">
+        <div class="loyalty-header">
+          <span class="loyalty-tier" id="profLoyaltyTier">🥉 Бронза (0%)</span>
+          <span class="loyalty-spent" id="profTotalSpent">Потрачено: $0.00</span>
+        </div>
+        <div class="loyalty-bar">
+          <div class="loyalty-bar-fill" id="profLoyaltyProgress" style="width: 10%;"></div>
+        </div>
+        <p class="loyalty-hint" id="profLoyaltyHint">Достигайте новых статусов для получения постоянной скидки на все товары!</p>
+      </div>
+
+      <!-- Реферальная система на сайт -->
+      <div class="profile-section referral-box">
+        <h4 class="section-subheading">🤝 Реферальная программа</h4>
+        <p class="ref-desc">Делитесь ссылкой на сайт! Получайте проценты с каждой покупки ваших друзей прямо на баланс.</p>
+        <div class="ref-link-row">
+          <input type="text" id="profRefLink" readonly value="https://...">
+          <button class="btn btn-primary" onclick="copyText('profRefLink', true)">📋 Скопировать</button>
+        </div>
+        <div class="ref-stats-row">
+          <div class="ref-stat"><span class="val" id="profRefInvited">0</span><span class="lbl">Приглашено</span></div>
+          <div class="ref-stat"><span class="val" id="profRefPercent">10%</span><span class="lbl">Ваш бонус</span></div>
+          <div class="ref-stat"><span class="val" id="profRefEarned">$0.00</span><span class="lbl">Заработано</span></div>
+        </div>
+      </div>
+
+      <!-- История покупок с ключами -->
+      <div class="profile-section purchases-box">
+        <h4 class="section-subheading">📦 Мои покупки</h4>
+        <div class="purchases-list" id="profPurchasesList">
+          <p class="empty-hint">У вас пока нет покупок. Выберите товар в каталоге!</p>
+        </div>
+      </div>
+
+      <div class="profile-footer">
+        <button class="btn btn-outline btn-block" onclick="logout()">Выйти из аккаунта</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Модальное окно успешной покупки -->
+  <div class="modal-overlay" id="successPurchaseModal" onclick="closeModalOnOverlay(event, 'successPurchaseModal')">
+    <div class="modal-card modal-success">
+      <button class="modal-close" onclick="closeModal('successPurchaseModal')">✕</button>
+      <div class="success-icon">🎉</div>
+      <h3 class="modal-heading">Спасибо за покупку!</h3>
+      <p class="modal-subheading" id="successProdTitle">Товар успешно оплачен</p>
+      <div class="delivered-content-box">
+        <label>Выданный товар / Ключ / Ссылка:</label>
+        <div class="delivered-value" id="successDeliveredValue">...</div>
+        <button class="btn btn-primary btn-block mt-2" onclick="copyText('successDeliveredValue')">📋 Скопировать товар</button>
+      </div>
+      <p class="delivered-hint">Вы также всегда можете найти этот товар в разделе <b>«Профиль» → «Мои покупки»</b>.</p>
+      <button class="btn btn-outline btn-block mt-3" onclick="closeModal('successPurchaseModal')">Вернуться к покупкам</button>
+    </div>
+  </div>
+
+  <!-- Модальное окно входа через Telegram -->
+  <div class="modal-overlay" id="loginModal" onclick="closeModalOnOverlay(event, 'loginModal')">
+    <div class="modal-card modal-login">
+      <button class="modal-close" onclick="closeModal('loginModal')">✕</button>
+      <div class="login-header-icon">✈️</div>
+      <h3 class="modal-heading">Вход через Telegram</h3>
+      <p class="modal-subheading">Авторизуйтесь, чтобы синхронизировать баланс, персональную скидку и заказы с ботом</p>
+      
+      <!-- Контейнер для официального Telegram Login Widget -->
+      <div class="telegram-widget-wrapper" id="telegramWidgetContainer">
+        <!-- Скрипт виджета инжектится из app.js -->
+      </div>
+
+      <div class="login-divider"><span>или для быстрого тестирования</span></div>
+
+      <!-- Быстрый тестовый вход по Telegram ID -->
+      <div class="test-login-box">
+        <input type="number" id="testLoginId" placeholder="Введите Telegram ID (например 123456789)">
+        <button class="btn btn-outline btn-block mt-2" onclick="handleTestLogin()">Войти по ID</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Всплывающие уведомления (Toasts) -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
