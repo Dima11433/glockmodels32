@@ -812,7 +812,14 @@ async def handle_cryptobot_create(request: web.Request):
         p = get_payments()
         invoice_id, pay_url = await p.create_invoice(amount_cents, desc, provider="cryptopay")
         # Сохраняем счет в БД
-        await db.create_invoice(invoice_id, user_id, "topup", None, None, amount_cents, pay_url)
+        await db.create_invoice(
+            invoice_id=invoice_id,
+            user_id=user_id,
+            purpose="topup",
+            amount=amount_cents,
+            pay_url=pay_url,
+            provider="cryptopay",
+        )
         return web.json_response({
             "status": "ok",
             "invoice_id": invoice_id,
