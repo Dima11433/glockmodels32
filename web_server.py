@@ -369,6 +369,10 @@ async def handle_auth_identifier(request: web.Request):
             "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
         }
     })
+    response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
+    return response
+
+
 async def send_telegram_direct_message(chat_id: int, text: str) -> bool:
     """Прямая отправка сообщения через Telegram Bot API без запущенного bot.py."""
     url = f"https://api.telegram.org/bot{config.bot_token}/sendMessage"
