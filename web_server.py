@@ -19,7 +19,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from config import load_config
 from db import Database
-from payments import Payments, apply_paid_invoice, accrue_referral
+from payments import Payments, apply_paid_invoice, accrue_referral, percent_for_clients
 import texts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -88,10 +88,23 @@ def get_token_from_request(request: web.Request) -> str | None:
     return None
 
 
-def get_user_id_from_request(request: web.Request) -> int | None:
+async def get_user_id_from_request(request: web.Request) -> int | None:
     token = get_token_from_request(request)
-    if token and token in SESSIONS:
+    if not token:
+        return None
+    if token in SESSIONS:
         return SESSIONS[token]["user_id"]
+    try:
+        cur = await db.conn.execute(
+            "SELECT user_id, username, created_at FROM site_sessions WHERE token = ?",
+            (token,)
+        )
+        row = await cur.fetchone()
+        if row:
+            SESSIONS[token] = {"user_id": row[0], "username": row[1], "created_at": row[2]}
+            return row[0]
+    except Exception:
+        pass
     return None
 
 
@@ -148,7 +161,7 @@ async def handle_init(request: web.Request):
     support_url = await db.get_setting("link:support_url") or "https://t.me/glock_admin_bot"
     wallet_addr = await db.get_setting("ton:wallet_address") or TON_WALLET_ADDRESS
 
-    user_id = get_user_id_from_request(request)
+    user_id = await get_user_id_from_request(request)
     user_info = None
     if user_id:
         user = await db.get_user(user_id)
@@ -187,27 +200,34 @@ async def handle_catalog(request: web.Request):
         )
         products_raw = [dict(r) for r in await cur.fetchall()]
 
-        # Добавляем фотографии и форматирование цен к товарам
+        # Пакетная загрузка фото для всех товаров за 1 быстрый запрос
+        cur = await db.conn.execute(
+            "SELECT product_id, file_id FROM product_photos ORDER BY product_id, position"
+        )
+        photos_by_product: dict[int, list[str]] = {}
+        for r in await cur.fetchall():
+            pid = r[0]
+            fid = r[1]
+            if fid.startswith("photos/"):
+                p_url = f"/{fid}"
+            elif fid.startswith("file_id:"):
+                p_url = f"/api/photo/{fid[8:]}"
+            else:
+                p_url = f"/api/photo/{fid}"
+            photos_by_product.setdefault(pid, []).append(p_url)
+
+        # Пакетная загрузка свободных единиц товаров за 1 быстрый запрос
+        cur = await db.conn.execute(
+            "SELECT product_id, COUNT(*) FROM product_items WHERE status = 'free' GROUP BY product_id"
+        )
+        stock_by_product = {r[0]: r[1] for r in await cur.fetchall()}
+
+        # Формирование итогового списка товаров
         products = []
         for p in products_raw:
-            cur = await db.conn.execute(
-                "SELECT file_id FROM product_photos WHERE product_id = ? ORDER BY position",
-                (p["id"],)
-            )
-            photo_rows = await cur.fetchall()
-            photos = []
-            for pr in photo_rows:
-                fid = pr["file_id"]
-                if fid.startswith("photos/"):
-                    photos.append(f"/{fid}")
-                elif fid.startswith("file_id:"):
-                    photos.append(f"/api/photo/{fid[8:]}")
-                else:
-                    photos.append(f"/api/photo/{fid}")
-
-            # Если фото нет — проверяем глобальный баннер или дефолт
+            photos = photos_by_product.get(p["id"], [])
             if not photos:
-                photos.append("/static/img/product_placeholder.png")
+                photos = ["/static/img/product_placeholder.png"]
 
             price_cents = p["price"]
             old_price_cents = p.get("old_price")
@@ -215,13 +235,8 @@ async def handle_catalog(request: web.Request):
             if old_price_cents and old_price_cents > price_cents:
                 discount_pct = int(round((1 - price_cents / old_price_cents) * 100))
 
-            # Проверяем наличие (stock)
             if p["kind"] == "oneoff":
-                cur = await db.conn.execute(
-                    "SELECT COUNT(*) FROM product_items WHERE product_id = ? AND status = 'free'",
-                    (p["id"],)
-                )
-                cnt = (await cur.fetchone())[0]
+                cnt = stock_by_product.get(p["id"], 0)
                 in_stock = cnt > 0
                 stock_count = cnt
             else:
@@ -453,11 +468,20 @@ async def handle_auth_send_code(request: web.Request):
 
     user_id = user_row[0]
     username = user_row[1] or str(user_id)
+    now = time.time()
+
+    # Проверка кулдауна (30 секунд) перед повторной отправкой
+    cur = await db.conn.execute("SELECT created_at FROM site_otp_codes WHERE user_id = ?", (user_id,))
+    prev_otp = await cur.fetchone()
+    if prev_otp and (now - prev_otp[0]) < 30:
+        sec_left = int(30 - (now - prev_otp[0]))
+        return web.json_response({
+            "error": f"Подождите {sec_left} сек. перед повторной отправкой кода"
+        }, status=429)
 
     # 6-значный цифровой код
     import secrets
     otp_code = f"{secrets.randbelow(900000) + 100000}"
-    now = time.time()
 
     await db.conn.execute("""
         INSERT INTO site_otp_codes (user_id, username, code, created_at, attempts)
@@ -594,6 +618,10 @@ async def handle_auth_bot_poll(request: web.Request):
     if status != "confirmed" or not user_id:
         return web.json_response({"status": "pending"})
 
+    # Маркируем токен как использованный, предотвращая повторную генерацию сессий
+    await db.conn.execute("UPDATE site_auth_tokens SET status = 'consumed' WHERE token = ?", (tok,))
+    await db.conn.commit()
+
     user = await db.get_or_create_user(user_id, username)
     session_token = generate_session_token(user_id)
     await save_session_db(session_token, user_id, username)
@@ -663,7 +691,7 @@ async def handle_auth_logout(request: web.Request):
 
 async def handle_user_me(request: web.Request):
     """Возвращает актуальный профиль, баланс, скидки и реферальную ссылку."""
-    user_id = get_user_id_from_request(request)
+    user_id = await get_user_id_from_request(request)
     if not user_id:
         return web.json_response({"error": "Не авторизован"}, status=401)
 
@@ -676,7 +704,7 @@ async def handle_user_me(request: web.Request):
     invited_cnt = await db.count_invited(user_id)
     clients_cnt = await db.count_referral_clients(user_id)
     earned_cents = await db.total_referral_earned(user_id)
-    ref_percent = texts.percent_for_clients(clients_cnt) if hasattr(texts, "percent_for_clients") else 10
+    ref_percent = percent_for_clients(clients_cnt)
 
     # Реферальная ссылка на сам сайт
     host = request.headers.get("Host", "localhost:8000")
@@ -720,7 +748,7 @@ async def handle_user_me(request: web.Request):
 
 async def handle_buy_balance(request: web.Request):
     """Покупка товара с баланса."""
-    user_id = get_user_id_from_request(request)
+    user_id = await get_user_id_from_request(request)
     if not user_id:
         return web.json_response({"error": "Авторизуйтесь для покупки"}, status=401)
 
@@ -751,8 +779,8 @@ async def handle_buy_balance(request: web.Request):
             "needed_cents": needed,
         }, status=400)
 
-    # Проводим покупку через БД
-    result = await db.buy_with_balance(user_id, prod_id)
+    # Проводим покупку через БД с учетом персональной скидки
+    result = await db.buy_with_balance(user_id, prod_id, final_price=final_price)
     status = result.get("status")
 
     if status == "no_funds":
@@ -792,7 +820,7 @@ async def handle_buy_balance(request: web.Request):
 
 async def handle_cryptobot_create(request: web.Request):
     """Создание счета CryptoBot для пополнения или прямой покупки."""
-    user_id = get_user_id_from_request(request)
+    user_id = await get_user_id_from_request(request)
     if not user_id:
         return web.json_response({"error": "Авторизуйтесь для пополнения"}, status=401)
 
@@ -833,8 +861,11 @@ async def handle_cryptobot_create(request: web.Request):
 
 async def handle_cryptobot_status(request: web.Request):
     """Проверка статуса счета в CryptoBot."""
-    user_id = get_user_id_from_request(request)
-    invoice_id = int(request.match_info["invoice_id"])
+    user_id = await get_user_id_from_request(request)
+    try:
+        invoice_id = int(request.match_info["invoice_id"])
+    except (ValueError, TypeError):
+        return web.json_response({"error": "Некорректный ID счета"}, status=400)
 
     inv = await db.get_invoice(invoice_id)
     if not inv:
@@ -875,7 +906,7 @@ async def handle_cryptobot_status(request: web.Request):
 
 async def handle_tonkeeper_create(request: web.Request):
     """Генерация данных для оплаты через Tonkeeper."""
-    user_id = get_user_id_from_request(request)
+    user_id = await get_user_id_from_request(request)
     if not user_id:
         return web.json_response({"error": "Авторизуйтесь для пополнения"}, status=401)
 
@@ -902,6 +933,15 @@ async def handle_tonkeeper_create(request: web.Request):
     universal_link = f"https://app.tonkeeper.com/transfer/{wallet_addr}?amount={nanotons}&text={quote(comment)}"
     deep_link = f"ton://transfer/{wallet_addr}?amount={nanotons}&text={quote(comment)}"
 
+    now = time.time()
+    # Сохраняем заказ в постоянную БД SQLite
+    await db.conn.execute("""
+        INSERT OR REPLACE INTO site_tonkeeper_orders
+        (topup_id, user_id, amount_usd, amount_cents, amount_ton, nanotons, comment, wallet, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    """, (topup_id, user_id, amount_usd, amount_cents, amount_ton, nanotons, comment, wallet_addr, now))
+    await db.conn.commit()
+
     TONKEEPER_ORDERS[topup_id] = {
         "user_id": user_id,
         "amount_usd": amount_usd,
@@ -911,7 +951,7 @@ async def handle_tonkeeper_create(request: web.Request):
         "comment": comment,
         "wallet": wallet_addr,
         "status": "pending",
-        "created_at": time.time(),
+        "created_at": now,
     }
 
     return web.json_response({
@@ -927,17 +967,37 @@ async def handle_tonkeeper_create(request: web.Request):
 
 
 async def handle_tonkeeper_check(request: web.Request):
-    """Проверка платежа Tonkeeper по комментарию через публичный TON API."""
-    user_id = get_user_id_from_request(request)
+    """Проверка платежа Tonkeeper по комментарию через публичный TON API с TonAPI fallback."""
+    user_id = await get_user_id_from_request(request)
     try:
         data = await request.json()
         topup_id = data.get("topup_id")
     except Exception:
         return web.json_response({"error": "Неверный запрос"}, status=400)
 
+    # Ищем заказ в БД или памяти
     order = TONKEEPER_ORDERS.get(topup_id)
     if not order:
-        return web.json_response({"error": "Заказ не найден"}, status=404)
+        cur = await db.conn.execute(
+            "SELECT topup_id, user_id, amount_usd, amount_cents, amount_ton, nanotons, comment, wallet, status, created_at FROM site_tonkeeper_orders WHERE topup_id = ?",
+            (topup_id,)
+        )
+        row = await cur.fetchone()
+        if not row:
+            return web.json_response({"error": "Заказ не найден"}, status=404)
+        order = {
+            "topup_id": row[0],
+            "user_id": row[1],
+            "amount_usd": row[2],
+            "amount_cents": row[3],
+            "amount_ton": row[4],
+            "nanotons": row[5],
+            "comment": row[6],
+            "wallet": row[7],
+            "status": row[8],
+            "created_at": row[9],
+        }
+        TONKEEPER_ORDERS[topup_id] = order
 
     if order["status"] == "paid":
         return web.json_response({"status": "paid", "message": "Платеж уже подтвержден!"})
@@ -946,11 +1006,11 @@ async def handle_tonkeeper_check(request: web.Request):
     expected_comment = order["comment"]
     paid = False
 
-    # Запрашиваем публичный API Toncenter для поиска транзакции с нужным комментарием
+    # 1. Запрашиваем публичный API Toncenter
     try:
         api_url = f"https://toncenter.com/api/v2/getTransactions?address={wallet}&limit=20"
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 if resp.status == 200:
                     t_data = await resp.json()
                     if t_data.get("ok") and t_data.get("result"):
@@ -962,25 +1022,54 @@ async def handle_tonkeeper_check(request: web.Request):
                                 paid = True
                                 break
     except Exception as e:
-        logger.warning(f"Ошибка проверки Toncenter API: {e}")
+        logger.warning(f"Ошибка Toncenter API: {e}")
+
+    # 2. Резервный запрос через TonAPI (если Toncenter недоступен или выдал 429)
+    if not paid:
+        try:
+            tonapi_url = f"https://tonapi.io/v2/blockchain/accounts/{wallet}/transactions?limit=20"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(tonapi_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        t_data = await resp.json()
+                        txs = t_data.get("transactions", [])
+                        for tx in txs:
+                            in_msg = tx.get("in_msg", {})
+                            val = int(in_msg.get("value", 0))
+                            decoded = in_msg.get("decoded_body", {})
+                            msg_comment = decoded.get("text", "") or in_msg.get("message", "")
+                            if expected_comment in msg_comment and val >= (order["nanotons"] * 0.95):
+                                paid = True
+                                break
+        except Exception as e:
+            logger.warning(f"Ошибка TonAPI fallback: {e}")
 
     if paid:
-        order["status"] = "paid"
-        await db.add_balance(order["user_id"], order["amount_cents"])
-        user = await db.get_user(order["user_id"])
-        u_name = user["username"] if user else None
-        mention = f"@{u_name}" if u_name else f"ID: {order['user_id']}"
-        topup_text = (
-            f"💎 <b>Пополнение баланса через Tonkeeper на САЙТЕ!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"💵 Сумма: <b>${order['amount_usd']:.2f}</b> (~{order['amount_ton']} TON)\n"
-            f"💳 Способ: <b>Tonkeeper</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"👤 Пользователь: {mention}\n"
-            f"🆔 ID: <code>{order['user_id']}</code>"
+        # Атомарно переводим статус в 'paid' в SQLite
+        cur = await db.conn.execute(
+            "UPDATE site_tonkeeper_orders SET status = 'paid', paid_at = ? WHERE topup_id = ? AND status = 'pending'",
+            (time.time(), topup_id)
         )
-        asyncio.create_task(send_channel_log(topup_text))
-        asyncio.create_task(accrue_referral(db, order["user_id"], order["amount_cents"], "site_tonkeeper_topup"))
+        await db.conn.commit()
+
+        if cur.rowcount > 0:
+            order["status"] = "paid"
+            await db.add_balance(order["user_id"], order["amount_cents"])
+            user = await db.get_user(order["user_id"])
+            u_name = user["username"] if user else None
+            mention = f"@{u_name}" if u_name else f"ID: {order['user_id']}"
+            topup_text = (
+                f"💎 <b>Пополнение баланса через Tonkeeper на САЙТЕ!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💵 Сумма: <b>${order['amount_usd']:.2f}</b> (~{order['amount_ton']} TON)\n"
+                f"💳 Способ: <b>Tonkeeper</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👤 Пользователь: {mention}\n"
+                f"🆔 ID: <code>{order['user_id']}</code>"
+            )
+            asyncio.create_task(send_channel_log(topup_text))
+            asyncio.create_task(accrue_referral(db, order["user_id"], order["amount_cents"], "site_tonkeeper_topup"))
+
         return web.json_response({"status": "paid", "message": "Платеж найден! Баланс успешно пополнен."})
     else:
         return web.json_response({
@@ -990,12 +1079,16 @@ async def handle_tonkeeper_check(request: web.Request):
 
 
 async def handle_photo_proxy(request: web.Request):
-    """Проксирование или отдача фото, если это file_id."""
+    """Проксирование или отдача фото с защитой от directory traversal."""
     file_id = request.match_info["file_id"]
-    # Проверяем локальный файл
-    local_path = BASE_DIR / "photos" / file_id
-    if local_path.exists():
-        return web.FileResponse(local_path)
+    # Проверяем локальный файл строго внутри папки photos
+    photos_dir = (BASE_DIR / "photos").resolve()
+    try:
+        local_path = (photos_dir / file_id).resolve()
+        if photos_dir in local_path.parents and local_path.is_file():
+            return web.FileResponse(local_path)
+    except Exception:
+        pass
 
     # Если это Telegram file_id — запрашиваем через getFile
     if config.bot_token:
@@ -1059,6 +1152,21 @@ async def on_startup(app: web.Application):
             user_id INTEGER,
             username TEXT,
             created_at REAL
+        )
+    """)
+    await db.conn.execute("""
+        CREATE TABLE IF NOT EXISTS site_tonkeeper_orders (
+            topup_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            amount_usd REAL NOT NULL,
+            amount_cents INTEGER NOT NULL,
+            amount_ton REAL NOT NULL,
+            nanotons INTEGER NOT NULL,
+            comment TEXT NOT NULL,
+            wallet TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at REAL NOT NULL,
+            paid_at REAL
         )
     """)
     await db.conn.commit()

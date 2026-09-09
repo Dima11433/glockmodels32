@@ -1379,6 +1379,18 @@ function closeModal(modalId) {
   }
 }
 
+function closeAllModals() {
+  document.querySelectorAll('.modal-overlay.active').forEach(modal => {
+    closeModal(modal.id);
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeAllModals();
+  }
+});
+
 function closeModalOnOverlay(event, modalId) {
   if (event.target && event.target.classList.contains('modal-overlay')) {
     closeModal(modalId);
@@ -1399,11 +1411,37 @@ function copyText(elementId, isInput = false) {
 
 function copyRawText(text) {
   if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    showToast('Скопировано в буфер обмена! 📋', 'success');
-  }).catch(() => {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('Скопировано в буфер обмена! 📋', 'success');
+    }).catch(() => {
+      fallbackCopyText(text);
+    });
+  } else {
+    fallbackCopyText(text);
+  }
+}
+
+function fallbackCopyText(text) {
+  try {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const successful = document.execCommand('copy');
+    textArea.remove();
+    if (successful) {
+      showToast('Скопировано в буфер обмена! 📋', 'success');
+    } else {
+      showToast('Не удалось скопировать', 'error');
+    }
+  } catch (err) {
     showToast('Не удалось скопировать', 'error');
-  });
+  }
 }
 
 function showToast(message, type = 'info') {

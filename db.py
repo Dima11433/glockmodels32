@@ -883,7 +883,7 @@ class Database:
 
     # --- покупки ---
 
-    async def buy_with_balance(self, user_id: int, product_id: int) -> dict:
+    async def buy_with_balance(self, user_id: int, product_id: int, final_price: int = None) -> dict:
         conn = self.conn
         await conn.execute("BEGIN IMMEDIATE")
         try:
@@ -892,9 +892,12 @@ class Database:
             if not p:
                 await conn.execute("ROLLBACK")
                 return {"status": "gone"}
+
+            deduct_amount = final_price if (final_price is not None and final_price >= 0) else p["price"]
+
             cur = await conn.execute(
                 "UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?",
-                (p["price"], user_id, p["price"]),
+                (deduct_amount, user_id, deduct_amount),
             )
             if cur.rowcount == 0:
                 await conn.execute("ROLLBACK")
@@ -915,7 +918,7 @@ class Database:
             cur = await conn.execute(
                 "INSERT INTO purchases (user_id, product_id, product_name, price, method, content_type, content_value) "
                 "VALUES (?, ?, ?, ?, 'balance', ?, ?)",
-                (user_id, product_id, p["name"], p["price"], content_type, content_value),
+                (user_id, product_id, p["name"], deduct_amount, content_type, content_value),
             )
             purchase_id = cur.lastrowid
             if item is not None:
@@ -924,7 +927,7 @@ class Database:
                     (purchase_id, item["id"]),
                 )
             await conn.commit()
-            return {"status": "ok", "purchase_id": purchase_id, "name": p["name"], "price": p["price"],
+            return {"status": "ok", "purchase_id": purchase_id, "name": p["name"], "price": deduct_amount,
                     "content_type": content_type, "content_value": content_value}
         except Exception:
             await conn.execute("ROLLBACK")

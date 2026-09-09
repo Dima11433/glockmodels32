@@ -207,19 +207,28 @@ async def buy(cb: CallbackQuery, db: Database, payments: Payments):
             return await cb.answer()
 
     user = await db.get_user(cb.from_user.id)
-    price = texts.fmt_usd(p["price"])
-    if p["price"] == 0:
+    stats = await db.get_user_stats(cb.from_user.id)
+    loyalty = texts.get_loyalty_info(stats["total_spent_cents"])
+    discount_p = loyalty.get("percent", 0)
+    final_price = p["price"]
+    if discount_p > 0:
+        final_price = int(round(p["price"] * (100 - discount_p) / 100))
+
+    price = texts.fmt_usd(final_price)
+    discount_note = f" (со скидкой {discount_p}%)" if discount_p > 0 else ""
+
+    if p["price"] == 0 or final_price == 0:
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎁 Получить бесплатно", callback_data=f"buyconfirm:{product_id}")],
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"prod:{product_id}")],
         ])
         await cb.message.answer(f"«{p['name']}» — бесплатно. Подтвердите получение:", reply_markup=markup)
-    elif user["balance"] >= p["price"]:
+    elif user["balance"] >= final_price:
         markup = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"✅ Оплатить {price} с баланса", callback_data=f"buyconfirm:{product_id}")],
             [InlineKeyboardButton(text="❌ Отмена", callback_data=f"prod:{product_id}")],
         ])
-        await cb.message.answer(f"Подтвердите покупку «{p['name']}» за {price}.", reply_markup=markup)
+        await cb.message.answer(f"Подтвердите покупку «{p['name']}» за {price}{discount_note}.", reply_markup=markup)
     else:
         rows = []
         if payments.enabled:
@@ -233,7 +242,7 @@ async def buy(cb: CallbackQuery, db: Database, payments: Payments):
             note = f"\n\n{texts.PAYMENTS_DISABLED}"
         currency = dict(user).get('currency', 'USD') if user else 'USD'
         await cb.message.answer(
-            f"На балансе {texts.fmt_balance(user['balance'], currency)}, а товар стоит {price}.{note}\n\n"
+            f"На балансе {texts.fmt_balance(user['balance'], currency)}, а товар стоит {price}{discount_note}.{note}\n\n"
             "Выберите способ оплаты (поддерживаются <b>СБП и банковские карты РФ</b> через P2P):",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
             parse_mode="HTML"
@@ -244,7 +253,16 @@ async def buy(cb: CallbackQuery, db: Database, payments: Payments):
 @router.callback_query(F.data.startswith("buyconfirm:"))
 async def buy_confirm(cb: CallbackQuery, db: Database, bot: Bot, config=None):
     product_id = int(cb.data.split(":")[1])
-    result = await db.buy_with_balance(cb.from_user.id, product_id)
+    p = await db.get_product(product_id)
+    final_price = None
+    if p:
+        stats = await db.get_user_stats(cb.from_user.id)
+        loyalty = texts.get_loyalty_info(stats["total_spent_cents"])
+        discount_p = loyalty.get("percent", 0)
+        if discount_p > 0:
+            final_price = int(round(p["price"] * (100 - discount_p) / 100))
+
+    result = await db.buy_with_balance(cb.from_user.id, product_id, final_price=final_price)
     if result["status"] == "no_funds":
         return await cb.answer("Недостаточно средств на балансе", show_alert=True)
     if result["status"] in ("gone", "out_of_stock"):
