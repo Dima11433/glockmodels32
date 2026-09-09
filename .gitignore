@@ -29,4 +29,5 @@ tests/
 __MACOSX/
 
 cloudflared.exe
+tunnel_url.txt
 
