@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: glock-models-shop
+    env: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python web_server.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: RUN_BOT
+        value: "true"
+      - key: CRYPTOPAY_TESTNET
+        value: "false"
+      - key: ADMIN_USERNAME
+        value: "ggg468q"
+      - key: ADMIN_GROUP_ID
+        value: "-1004374620785"
+      - key: TON_WALLET_ADDRESS
+        value: "UQDdIe7Ga1z-7QvOcJp23sgW85_gn7KwzSxAa46_Qnz3BT79"
+      - key: BOT_TOKEN
+        sync: false
+      - key: CRYPTOPAY_TOKEN
+        sync: false

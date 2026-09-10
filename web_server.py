@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import shutil
 import sys
 import time
 import uuid
@@ -27,6 +28,15 @@ logger = logging.getLogger("web_server")
 
 config = load_config()
 db_path = os.getenv("DB_PATH", str(BASE_DIR / "shop.db"))
+
+# Инициализация БД из seed-файла, если база отсутствует (на хостинге)
+if not os.path.exists(db_path) and os.path.exists(BASE_DIR / "shop_seed.db"):
+    try:
+        shutil.copy2(BASE_DIR / "shop_seed.db", db_path)
+        logger.info(f"База данных успешно инициализирована из shop_seed.db в {db_path}")
+    except Exception as e:
+        logger.warning(f"Ошибка копирования seed базы: {e}")
+
 db = Database(db_path)
 payments: Payments | None = None
 
@@ -1188,9 +1198,39 @@ async def on_startup(app: web.Application):
         logger.warning(f"Инициализация платежного шлюза отложена: {e}")
     logger.info("Подключение к shop.db успешно установлено.")
 
+    # Фоновый запуск Telegram-бота при RUN_BOT=true (для облачных хостингов)
+    asyncio.create_task(start_bot_process())
+
+
+bot_process = None
+
+async def start_bot_process():
+    global bot_process
+    run_bot = os.getenv("RUN_BOT", "false").lower() in ("true", "1", "yes")
+    if not run_bot:
+        return
+    if not config.bot_token:
+        logger.warning("RUN_BOT включен, но BOT_TOKEN не настроен в переменных окружения.")
+        return
+    try:
+        logger.info("Запуск Telegram-бота (bot.py) в фоновом режиме...")
+        bot_process = await asyncio.create_subprocess_exec(
+            sys.executable, str(BASE_DIR / "bot.py")
+        )
+        logger.info(f"Telegram-бот успешно запущен (PID: {bot_process.pid})")
+    except Exception as e:
+        logger.error(f"Не удалось запустить bot.py: {e}")
+
 
 async def on_cleanup(app: web.Application):
-    global payments
+    global payments, bot_process
+    if bot_process:
+        try:
+            bot_process.terminate()
+            await bot_process.wait()
+            logger.info("Фоновый процесс Telegram-бота остановлен.")
+        except Exception:
+            pass
     if payments:
         try:
             await payments.close()
