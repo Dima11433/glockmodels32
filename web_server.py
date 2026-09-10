@@ -118,6 +118,51 @@ async def get_user_id_from_request(request: web.Request) -> int | None:
     return None
 
 
+async def get_user_from_request(request: web.Request) -> dict | None:
+    """Извлекает объект пользователя из БД по токену сессии."""
+    token = get_token_from_request(request)
+    if not token:
+        return None
+    user_id = None
+    if token in SESSIONS:
+        user_id = SESSIONS[token].get("user_id")
+    else:
+        try:
+            cur = await db.conn.execute(
+                "SELECT user_id, username, created_at FROM site_sessions WHERE token = ?",
+                (token,)
+            )
+            row = await cur.fetchone()
+            if row:
+                user_id = row[0]
+                SESSIONS[token] = {"user_id": user_id, "username": row[1], "created_at": row[2]}
+        except Exception:
+            pass
+    if not user_id:
+        return None
+    user = await db.get_user(user_id)
+    return dict(user) if user else None
+
+
+async def check_is_admin(user_id: int | None, username: str | None) -> bool:
+    """Проверяет права администратора по никнейму, настройкам и таблице admins."""
+    if not user_id and not username:
+        return False
+    if username and config.admin_username:
+        if username.lower().lstrip("@") == config.admin_username.lower().lstrip("@"):
+            return True
+    try:
+        admin_id_setting = await db.get_setting("admin_id")
+        if admin_id_setting and user_id and str(user_id) == str(admin_id_setting):
+            return True
+    except Exception:
+        pass
+    try:
+        return await db.is_admin(user_id=user_id, username=username)
+    except Exception:
+        return False
+
+
 def verify_telegram_auth(auth_data: dict, bot_token: str) -> bool:
     """Проверка подписи данных от Telegram Login Widget по спецификации Telegram."""
     check_hash = auth_data.get("hash")
@@ -178,6 +223,7 @@ async def handle_init(request: web.Request):
         if user:
             stats = await db.get_user_stats(user_id)
             loyalty = texts.get_loyalty_info(stats["total_spent_cents"])
+            is_adm = await check_is_admin(user["id"], user["username"])
             user_info = {
                 "id": user["id"],
                 "username": user["username"],
@@ -185,6 +231,7 @@ async def handle_init(request: web.Request):
                 "balance_usd": f"${user['balance'] / 100:.2f}",
                 "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
                 "loyalty": loyalty,
+                "is_admin": is_adm,
             }
 
     return web.json_response({
@@ -579,6 +626,7 @@ async def handle_auth_verify_code(request: web.Request):
 
     token = generate_session_token(user_id)
     await save_session_db(token, user_id, user["username"])
+    is_adm = await check_is_admin(user_id, user["username"])
 
     response = web.json_response({
         "status": "ok",
@@ -589,6 +637,7 @@ async def handle_auth_verify_code(request: web.Request):
             "balance_cents": user["balance"],
             "balance_usd": f"${user['balance'] / 100:.2f}",
             "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+            "is_admin": is_adm,
         }
     })
     response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
@@ -636,6 +685,7 @@ async def handle_auth_bot_poll(request: web.Request):
     session_token = generate_session_token(user_id)
     await save_session_db(session_token, user_id, username)
     SESSIONS[session_token]["first_name"] = first_name
+    is_adm = await check_is_admin(user_id, username)
 
     response = web.json_response({
         "status": "confirmed",
@@ -646,6 +696,7 @@ async def handle_auth_bot_poll(request: web.Request):
             "balance_cents": user["balance"],
             "balance_usd": f"${user['balance'] / 100:.2f}",
             "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+            "is_admin": is_adm,
         }
     })
     response.set_cookie("session_token", session_token, max_age=86400 * 30, httponly=False, samesite="Lax")
@@ -665,9 +716,19 @@ async def handle_auth_demo(request: web.Request):
         row = await cur.fetchone()
         user_id = row[0] if row else 999999999
 
-    user = await db.get_or_create_user(user_id, f"user_{user_id}")
+    req_username = str(data.get("username", "")).strip().lstrip("@")
+    if req_username:
+        user = await db.get_or_create_user(user_id, req_username)
+        await db.conn.execute("UPDATE users SET username = ? WHERE id = ?", (req_username, user_id))
+        await db.conn.commit()
+        user = await db.get_user(user_id)
+    else:
+        user = await db.get_user(user_id)
+        if not user:
+            user = await db.get_or_create_user(user_id, f"user_{user_id}")
     token = generate_session_token(user_id)
     await save_session_db(token, user_id, user["username"])
+    is_adm = await check_is_admin(user_id, user["username"])
     response = web.json_response({
         "status": "ok",
         "token": token,
@@ -677,6 +738,7 @@ async def handle_auth_demo(request: web.Request):
             "balance_cents": user["balance"],
             "balance_usd": f"${user['balance'] / 100:.2f}",
             "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+            "is_admin": is_adm,
         }
     })
     response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
@@ -715,6 +777,7 @@ async def handle_user_me(request: web.Request):
     clients_cnt = await db.count_referral_clients(user_id)
     earned_cents = await db.total_referral_earned(user_id)
     ref_percent = percent_for_clients(clients_cnt)
+    is_adm = await check_is_admin(user["id"], user["username"])
 
     # Реферальная ссылка на сам сайт
     host = request.headers.get("Host", "localhost:8000")
@@ -741,6 +804,7 @@ async def handle_user_me(request: web.Request):
         "total_spent_usd": f"${stats['total_spent_cents'] / 100:.2f}",
         "completed_orders": stats["completed_orders"],
         "loyalty": loyalty,
+        "is_admin": is_adm,
         "referral": {
             "link": site_ref_url,
             "invited_count": invited_cnt,
@@ -1125,6 +1189,357 @@ async def handle_photo_proxy(request: web.Request):
     return web.Response(status=404)
 
 
+# ==========================================
+# ADMIN PANEL API & CATALOG EXPORT
+# ==========================================
+
+async def export_catalog_json() -> bool:
+    """Регенерирует статический catalog.json для работы сайта на GitHub Pages."""
+    try:
+        cur = await db.conn.execute("SELECT id, name, description, position, parent_id FROM categories ORDER BY position, id")
+        categories = [dict(r) for r in await cur.fetchall()]
+        cat_map = {c["id"]: c for c in categories}
+
+        cur = await db.conn.execute(
+            "SELECT id, category_id, name, description, price, old_price, kind, content_type, visible "
+            "FROM products WHERE visible = 1 ORDER BY id"
+        )
+        products_raw = [dict(r) for r in await cur.fetchall()]
+
+        cur = await db.conn.execute("SELECT product_id, file_id FROM product_photos ORDER BY product_id, position")
+        photos_by_product: dict[int, list[str]] = {}
+        for r in await cur.fetchall():
+            pid = r[0]
+            fid = r[1]
+            if fid.startswith("photos/"):
+                p_url = fid
+            elif fid.startswith("file_id:"):
+                p_url = f"api/photo/{fid[8:]}"
+            else:
+                p_url = f"api/photo/{fid}"
+            photos_by_product.setdefault(pid, []).append(p_url)
+
+        cur = await db.conn.execute(
+            "SELECT product_id, COUNT(*) FROM product_items WHERE status = 'free' GROUP BY product_id"
+        )
+        stock_by_product = {r[0]: r[1] for r in await cur.fetchall()}
+
+        products = []
+        for p in products_raw:
+            photos = photos_by_product.get(p["id"], [])
+            if not photos:
+                photos = ["web/img/product_placeholder.png"]
+
+            price_cents = p["price"]
+            old_price_cents = p.get("old_price")
+            discount_pct = 0
+            if old_price_cents and old_price_cents > price_cents:
+                discount_pct = int(round((1 - price_cents / old_price_cents) * 100))
+
+            if p["kind"] == "oneoff":
+                cnt = stock_by_product.get(p["id"], 0)
+                in_stock = cnt > 0
+                stock_count = cnt
+            else:
+                in_stock = True
+                stock_count = 999
+
+            cat_info = cat_map.get(p["category_id"], {})
+            prod_entry = {
+                "id": p["id"],
+                "category_id": p["category_id"],
+                "name": p["name"],
+                "description": p["description"],
+                "price": price_cents,
+                "old_price": old_price_cents,
+                "kind": p["kind"],
+                "content_type": p["content_type"],
+                "visible": p["visible"],
+                "category_name": cat_info.get("name", ""),
+                "parent_category_id": cat_info.get("parent_id"),
+                "photos": photos,
+                "price_cents": price_cents,
+                "price_usd": f"${price_cents / 100:.2f}",
+                "price_rub": f"{int(round(price_cents * texts.EXCHANGE_RATE / 100)):,} ₽".replace(",", " "),
+                "old_price_usd": f"${old_price_cents / 100:.2f}" if old_price_cents else None,
+                "discount_pct": discount_pct,
+                "in_stock": in_stock,
+                "stock_count": stock_count,
+            }
+            products.append(prod_entry)
+
+        data = {
+            "shop_title": await db.get_setting("shop_title") or "GLOCK SHOP",
+            "support_url": await db.get_setting("link:support_url") or "https://t.me/glock_admin_bot",
+            "bot_username": config.bot_username or "glock_models_bot",
+            "categories": categories,
+            "products": products
+        }
+        with open(BASE_DIR / "catalog.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info(f"catalog.json успешно обновлен ({len(products)} товаров).")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка сохранения catalog.json: {e}")
+        return False
+
+
+async def handle_admin_check(request: web.Request):
+    """Проверка прав текущего пользователя."""
+    user = await get_user_from_request(request)
+    if not user:
+        return web.json_response({"is_admin": False}, status=401)
+    is_adm = await check_is_admin(user["id"], user["username"])
+    return web.json_response({"is_admin": is_adm, "username": user["username"], "user_id": user["id"]})
+
+
+async def handle_admin_products(request: web.Request):
+    """Возвращает все товары магазина для админ-панели (включая скрытые)."""
+    user = await get_user_from_request(request)
+    if not user or not await check_is_admin(user["id"], user["username"]):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    cur = await db.conn.execute("SELECT id, name, description, position, parent_id FROM categories ORDER BY position, id")
+    categories = [dict(r) for r in await cur.fetchall()]
+    cat_map = {c["id"]: c for c in categories}
+
+    cur = await db.conn.execute(
+        "SELECT id, category_id, name, description, price, old_price, kind, content_type, content_value, visible "
+        "FROM products ORDER BY id DESC"
+    )
+    products_raw = [dict(r) for r in await cur.fetchall()]
+
+    cur = await db.conn.execute("SELECT product_id, file_id FROM product_photos ORDER BY product_id, position")
+    photos_by_product: dict[int, list[str]] = {}
+    for r in await cur.fetchall():
+        pid, fid = r[0], r[1]
+        p_url = fid if fid.startswith("photos/") else (f"api/photo/{fid[8:]}" if fid.startswith("file_id:") else f"api/photo/{fid}")
+        photos_by_product.setdefault(pid, []).append(p_url)
+
+    cur = await db.conn.execute("SELECT product_id, COUNT(*) FROM product_items WHERE status = 'free' GROUP BY product_id")
+    stock_by_product = {r[0]: r[1] for r in await cur.fetchall()}
+
+    products = []
+    for p in products_raw:
+        photos = photos_by_product.get(p["id"], [])
+        if not photos:
+            photos = ["web/img/product_placeholder.png"]
+        price_cents = p["price"]
+        old_price_cents = p.get("old_price")
+        discount_pct = 0
+        if old_price_cents and old_price_cents > price_cents:
+            discount_pct = int(round((1 - price_cents / old_price_cents) * 100))
+        cat_info = cat_map.get(p["category_id"], {})
+        stock_count = stock_by_product.get(p["id"], 0) if p["kind"] == "oneoff" else 999
+        products.append({
+            "id": p["id"],
+            "category_id": p["category_id"],
+            "category_name": cat_info.get("name", "Без раздела"),
+            "name": p["name"],
+            "description": p["description"],
+            "price_cents": price_cents,
+            "price_usd": f"${price_cents / 100:.2f}",
+            "old_price_cents": old_price_cents,
+            "old_price_usd": f"${old_price_cents / 100:.2f}" if old_price_cents else None,
+            "discount_pct": discount_pct,
+            "kind": p["kind"],
+            "content_value": p.get("content_value") or "",
+            "visible": p["visible"],
+            "stock_count": stock_count,
+            "photos": photos
+        })
+
+    return web.json_response({"products": products, "categories": categories})
+
+
+async def handle_admin_product_add(request: web.Request):
+    """Добавление нового товара через веб-админку (с поддержкой фото и штучных товаров)."""
+    user = await get_user_from_request(request)
+    if not user or not await check_is_admin(user["id"], user["username"]):
+        return web.json_response({"error": "Доступ запрещен (требуются права администратора)"}, status=403)
+
+    content_type_hdr = request.headers.get("Content-Type", "")
+    photo_bytes = None
+    photo_filename = None
+
+    if "multipart/form-data" in content_type_hdr:
+        reader = await request.multipart()
+        form_data = {}
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            if part.name == "photo" and part.filename:
+                photo_filename = part.filename
+                photo_bytes = await part.read()
+            else:
+                val = await part.text()
+                form_data[part.name] = val
+        data = form_data
+    else:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Некорректный формат данных"}, status=400)
+
+    try:
+        category_id = int(data.get("category_id", 0))
+        name = str(data.get("name", "")).strip()
+        description = str(data.get("description", "")).strip()
+        price_raw = float(str(data.get("price", "0")).replace(",", "."))
+        price_cents = max(1, int(round(price_raw * 100)))
+        kind = str(data.get("kind", "reusable")).strip().lower()
+        if kind not in ("reusable", "oneoff"):
+            kind = "reusable"
+        content_value = str(data.get("content_value", "")).strip()
+    except Exception as e:
+        return web.json_response({"error": f"Ошибка входных данных: {e}"}, status=400)
+
+    if not name:
+        return web.json_response({"error": "Укажите название товара"}, status=400)
+    if not category_id:
+        return web.json_response({"error": "Выберите раздел для товара"}, status=400)
+
+    # Создаем товар в БД
+    if kind == "reusable":
+        pid = await db.add_product(
+            category_id=category_id,
+            name=name,
+            description=description,
+            price=price_cents,
+            kind="reusable",
+            content_type="text",
+            content_value=content_value
+        )
+    else:
+        pid = await db.add_product(
+            category_id=category_id,
+            name=name,
+            description=description,
+            price=price_cents,
+            kind="oneoff"
+        )
+        lines = [line.strip() for line in content_value.splitlines() if line.strip()]
+        if lines:
+            items_to_add = [("text", line) for line in lines]
+            await db.add_items(pid, items_to_add)
+
+    # Если загружено фото
+    if photo_bytes and len(photo_bytes) > 0:
+        photos_dir = BASE_DIR / "photos"
+        photos_dir.mkdir(exist_ok=True)
+        ext = os.path.splitext(photo_filename or "photo.jpg")[1].lower() or ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            ext = ".jpg"
+        saved_name = f"product_{pid}_photo_{uuid.uuid4().hex[:8]}{ext}"
+        saved_path = photos_dir / saved_name
+        with open(saved_path, "wb") as f:
+            f.write(photo_bytes)
+        rel_photo_path = f"photos/{saved_name}"
+        await db.add_product_photo(pid, rel_photo_path)
+
+    # Обновляем catalog.json для витрины
+    await export_catalog_json()
+
+    return web.json_response({
+        "status": "ok",
+        "product_id": pid,
+        "message": f"Товар «{name}» успешно добавлен!"
+    })
+
+
+async def handle_admin_product_delete(request: web.Request):
+    """Удаление (скрытие) товара из каталога."""
+    user = await get_user_from_request(request)
+    if not user or not await check_is_admin(user["id"], user["username"]):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    data = await request.json()
+    prod_id = int(data.get("product_id", 0))
+    if not prod_id:
+        return web.json_response({"error": "Укажите product_id"}, status=400)
+
+    # Скрываем товар из витрины (visible = 0)
+    await db.conn.execute("UPDATE products SET visible = 0 WHERE id = ?", (prod_id,))
+    await db.conn.commit()
+
+    await export_catalog_json()
+    return web.json_response({"status": "ok", "message": "Товар удален из каталога"})
+
+
+async def handle_admin_pricing_apply(request: web.Request):
+    """Применение скидки или наценки (аналог handlers/admin.py)."""
+    user = await get_user_from_request(request)
+    if not user or not await check_is_admin(user["id"], user["username"]):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    data = await request.json()
+    scope = data.get("scope", "all")  # all | cat | prod
+    op = data.get("op", "discount")   # discount | markup
+    target_id = data.get("target_id")
+    try:
+        percent = float(data.get("percent", 0))
+        if percent <= 0 or (op == "discount" and percent >= 100):
+            return web.json_response({"error": "Процент должен быть от 1 до 99"}, status=400)
+    except Exception:
+        return web.json_response({"error": "Неверное значение процента"}, status=400)
+
+    pid = int(target_id) if (scope == "prod" and target_id) else None
+    cid = int(target_id) if (scope == "cat" and target_id) else None
+
+    if op == "discount":
+        count, updated = await db.apply_discount(percent=percent, product_id=pid, category_id=cid)
+        msg = f"Скидка -{percent:g}% успешно применена к {count} товарам!"
+    else:
+        count, updated = await db.apply_markup(percent=percent, product_id=pid, category_id=cid)
+        msg = f"Цены успешно повышены на +{percent:g}% для {count} товаров!"
+
+    await export_catalog_json()
+    return web.json_response({
+        "status": "ok",
+        "count": count,
+        "updated": updated,
+        "message": msg
+    })
+
+
+async def handle_admin_pricing_reset(request: web.Request):
+    """Сброс скидок обратно к базовой цене old_price (аналог handlers/admin.py)."""
+    user = await get_user_from_request(request)
+    if not user or not await check_is_admin(user["id"], user["username"]):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    data = await request.json()
+    scope = data.get("scope", "all")
+    target_id = data.get("target_id")
+
+    pid = int(target_id) if (scope == "prod" and target_id) else None
+    cid = int(target_id) if (scope == "cat" and target_id) else None
+
+    count = await db.reset_discounts(product_id=pid, category_id=cid)
+    await export_catalog_json()
+    return web.json_response({
+        "status": "ok",
+        "count": count,
+        "message": f"Скидки сброшены! Восстановлены базовые цены для {count} товаров."
+    })
+
+
+async def handle_admin_pricing_summary(request: web.Request):
+    """Сводка цен и скидок для предпросмотра."""
+    user = await get_user_from_request(request)
+    if not user or not await check_is_admin(user["id"], user["username"]):
+        return web.json_response({"error": "Доступ запрещен"}, status=403)
+
+    pid_raw = request.query.get("product_id")
+    cid_raw = request.query.get("category_id")
+    pid = int(pid_raw) if pid_raw and pid_raw.isdigit() else None
+    cid = int(cid_raw) if cid_raw and cid_raw.isdigit() else None
+
+    stats = await db.get_pricing_summary(product_id=pid, category_id=cid)
+    return web.json_response({"status": "ok", "summary": stats})
+
+
 async def handle_index(request: web.Request):
     """Отдает главную страницу сайта."""
     root_index = BASE_DIR / "index.html"
@@ -1263,6 +1678,15 @@ def create_app() -> web.Application:
     app.router.add_post("/api/auth/test_login", handle_auth_demo)
     app.router.add_post("/api/auth/logout", handle_auth_logout)
     app.router.add_get("/api/user/me", handle_user_me)
+
+    # Админ-панель
+    app.router.add_get("/api/admin/check", handle_admin_check)
+    app.router.add_get("/api/admin/products", handle_admin_products)
+    app.router.add_post("/api/admin/product/add", handle_admin_product_add)
+    app.router.add_post("/api/admin/product/delete", handle_admin_product_delete)
+    app.router.add_post("/api/admin/pricing/apply", handle_admin_pricing_apply)
+    app.router.add_post("/api/admin/pricing/reset", handle_admin_pricing_reset)
+    app.router.add_get("/api/admin/pricing/summary", handle_admin_pricing_summary)
 
     # Покупки и пополнения
     app.router.add_post("/api/buy/balance", handle_buy_balance)

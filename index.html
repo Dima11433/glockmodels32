@@ -38,6 +38,11 @@
           <button class="curr-btn" id="btnRUB" onclick="setCurrency('RUB')">RUB (₽)</button>
         </div>
 
+        <!-- Кнопка админ-панели (видна только администратору) -->
+        <button class="btn btn-admin-header" id="btnAdminPanel" style="display: none;" onclick="openAdminModal()">
+          <span>🛡️</span> Админка
+        </button>
+
         <!-- Кнопка входа или профиль пользователя -->
         <div id="authContainer">
           <button class="btn btn-primary btn-login" onclick="openLoginModal()">
@@ -319,6 +324,9 @@
       </div>
 
       <div class="profile-footer">
+        <button class="btn btn-admin-header btn-block mb-2" id="btnAdminProfile" style="display: none; justify-content: center; margin-bottom: 10px;" onclick="closeModal('profileModal'); openAdminModal();">
+          <span>🛡️</span> Открыть панель управления магазином
+        </button>
         <button class="btn btn-outline btn-block" onclick="logout()">Выйти из аккаунта</button>
       </div>
 
@@ -397,6 +405,210 @@
           <button class="btn-link" id="btnResendCode" onclick="handleResendCode()">Отправить повторно</button>
           <span class="otp-sep">•</span>
           <button class="btn-link" onclick="backToIdentifierStep()">Сменить никнейм</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНОЕ ОКНО АДМИН-ПАНЕЛИ -->
+  <div class="modal-overlay" id="adminModal" onclick="closeModalOnOverlay(event, 'adminModal')">
+    <div class="modal-card modal-admin">
+      <button class="modal-close" onclick="closeModal('adminModal')">✕</button>
+      
+      <div class="admin-modal-header">
+        <div class="admin-header-title-row">
+          <span class="admin-icon-shield">🛡️</span>
+          <div>
+            <h3 class="modal-heading">Панель управления магазином</h3>
+            <p class="modal-subheading">Добавление товаров, управление ценами и скидками</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Вкладки админки -->
+      <div class="admin-tabs-nav">
+        <button class="admin-tab active" id="adminTabBtnAdd" onclick="switchAdminTab('add')">
+          ➕ Добавить товар
+        </button>
+        <button class="admin-tab" id="adminTabBtnDiscounts" onclick="switchAdminTab('discounts')">
+          🏷️ Скидки и наценки
+        </button>
+        <button class="admin-tab" id="adminTabBtnProds" onclick="switchAdminTab('prods')">
+          📦 Управление товарами
+        </button>
+      </div>
+
+      <!-- ВКЛАДКА 1: Добавление товара -->
+      <div class="admin-tab-pane" id="adminTabAdd">
+        <form id="adminAddProdForm" onsubmit="handleAdminAddProductSubmit(event)">
+          <div class="form-row-2">
+            <div class="form-group">
+              <label class="form-label">Раздел (Категория):</label>
+              <select id="adminProdCatSelect" class="form-control" required>
+                <option value="">Выберите категорию...</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Цена в долларах ($ USD):</label>
+              <div class="input-with-prefix">
+                <span class="input-pfx">$</span>
+                <input type="number" id="adminProdPriceInput" class="form-control" step="0.01" min="0.1" placeholder="4.99" required oninput="previewAdminPriceRub()">
+              </div>
+              <small class="form-hint" id="adminProdPriceRubHint">≈ 0 ₽</small>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Название товара:</label>
+            <input type="text" id="adminProdNameInput" class="form-control" placeholder="Например: Пак Модели Алина (150+ фото)" required>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Описание товара:</label>
+            <textarea id="adminProdDescInput" class="form-control" rows="2" placeholder="Подробное описание содержимого пака/товара..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Тип товара:</label>
+            <div class="kind-radio-row">
+              <label class="kind-radio-card active" id="kindRadioReusableCard" onclick="selectAdminKind('reusable')">
+                <input type="radio" name="adminProdKind" value="reusable" checked style="margin-top: 4px;">
+                <div>
+                  <b>🔄 Многоразовый пак / ссылка</b>
+                  <small>Одна ссылка/текст выдается всем покупателям (неограниченное количество)</small>
+                </div>
+              </label>
+              <label class="kind-radio-card" id="kindRadioOneoffCard" onclick="selectAdminKind('oneoff')">
+                <input type="radio" name="adminProdKind" value="oneoff" style="margin-top: 4px;">
+                <div>
+                  <b>📦 Штучный товар (одноразовый)</b>
+                  <small>Каждая строка — отдельный уникальный ключ/аккаунт (списывается после покупки)</small>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Поле содержимого для reusable -->
+          <div class="form-group" id="adminContentReusableBox">
+            <label class="form-label">Ссылка на пак или текст выдачи покупателю:</label>
+            <input type="text" id="adminProdContentInput" class="form-control" placeholder="https://mega.nz/... или текст ключа/доступа">
+          </div>
+
+          <!-- Поле содержимого для oneoff -->
+          <div class="form-group" id="adminContentOneoffBox" style="display: none;">
+            <label class="form-label">Единицы товара (каждая строка = 1 штука на одну покупку):</label>
+            <textarea id="adminProdItemsInput" class="form-control" rows="3" placeholder="login:pass:key1&#10;login:pass:key2&#10;login:pass:key3"></textarea>
+          </div>
+
+          <!-- Фотография -->
+          <div class="form-group">
+            <label class="form-label">Фотография товара (JPG, PNG, WebP):</label>
+            <div class="photo-upload-dropzone" onclick="document.getElementById('adminProdPhotoInput').click()">
+              <input type="file" id="adminProdPhotoInput" accept="image/jpeg,image/png,image/webp" style="display: none;" onchange="handleAdminPhotoSelected(event)">
+              <div id="adminPhotoDropzoneContent">
+                <span class="upload-icon">📷</span>
+                <span class="upload-text">Нажмите для выбора фото или перетащите файл</span>
+              </div>
+              <img id="adminPhotoPreview" class="photo-preview-thumb" style="display: none;" alt="Превью">
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary btn-block btn-lg mt-3" id="btnAdminSubmitProduct">
+            🚀 Создать и опубликовать товар
+          </button>
+        </form>
+      </div>
+
+      <!-- ВКЛАДКА 2: Скидки и наценки (как в handlers/admin.py) -->
+      <div class="admin-tab-pane" id="adminTabDiscounts" style="display: none;">
+        <div class="discount-management-card">
+          <h4 class="admin-sec-title">🏷️ Управление ценами (аналог Telegram-бота)</h4>
+          <p class="admin-sec-desc">Устанавливайте скидки в %, делайте наценку или сбрасывайте цены к исходным базовым значениям.</p>
+
+          <div class="form-group mt-3">
+            <label class="form-label">1. Область применения:</label>
+            <select id="adminPricingScope" class="form-control" onchange="handlePricingScopeChange()">
+              <option value="all">🔥 ВСЕ товары магазина</option>
+              <option value="cat">📁 Конкретный раздел</option>
+              <option value="prod">📦 Конкретный товар</option>
+            </select>
+          </div>
+
+          <!-- Выбор категории при scope == cat -->
+          <div class="form-group" id="adminPricingCatWrap" style="display: none;">
+            <label class="form-label">Выберите раздел:</label>
+            <select id="adminPricingCatSelect" class="form-control" onchange="loadPricingSummary()">
+            </select>
+          </div>
+
+          <!-- Выбор товара при scope == prod -->
+          <div class="form-group" id="adminPricingProdWrap" style="display: none;">
+            <label class="form-label">Выберите товар:</label>
+            <select id="adminPricingProdSelect" class="form-control" onchange="loadPricingSummary()">
+            </select>
+          </div>
+
+          <!-- Операция: Скидка или Наценка -->
+          <div class="form-group mt-3">
+            <label class="form-label">2. Операция над ценой:</label>
+            <div class="op-toggle-row">
+              <button type="button" class="op-btn active" id="btnOpDiscount" onclick="selectPricingOp('discount')">
+                📉 Скидка в %
+              </button>
+              <button type="button" class="op-btn" id="btnOpMarkup" onclick="selectPricingOp('markup')">
+                📈 Повышение цен (наценка в %)
+              </button>
+            </div>
+          </div>
+
+          <!-- Ввод процента -->
+          <div class="form-group mt-3">
+            <label class="form-label" id="pricingPercentLabel">3. Процент изменения цены:</label>
+            <div class="preset-percent-row" id="pricingPresetsRow">
+              <button type="button" class="preset-pct-btn" onclick="setPricingPercent(10)">10%</button>
+              <button type="button" class="preset-pct-btn active" onclick="setPricingPercent(20)">20%</button>
+              <button type="button" class="preset-pct-btn" onclick="setPricingPercent(30)">30%</button>
+              <button type="button" class="preset-pct-btn" onclick="setPricingPercent(50)">50%</button>
+            </div>
+            <div class="input-with-suffix mt-2">
+              <input type="number" id="adminPricingPercentInput" class="form-control" min="1" max="99" value="20">
+              <span class="input-sfx">%</span>
+            </div>
+          </div>
+
+          <!-- Предпросмотр -->
+          <div id="adminPricingSummaryBox" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px;">
+            <div id="adminPricingSummaryText">Товаров в выборке: загрузка...</div>
+          </div>
+
+          <button type="button" class="btn btn-primary btn-block btn-lg" id="btnApplyPricing" onclick="executePricingApply()">
+            ✅ Применить изменения цен
+          </button>
+
+          <!-- Разделитель и сброс скидок -->
+          <div class="admin-reset-divider">
+            <span>Сброс скидок</span>
+          </div>
+
+          <div class="admin-reset-box">
+            <p class="reset-desc">При сбросе всем выбранным товарам будет возвращена их исходная базовая цена (из поля <code>old_price</code>).</p>
+            <button type="button" class="btn btn-danger btn-block" onclick="executePricingReset()">
+              🔄 Сбросить скидки (вернуть старые цены)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ВКЛАДКА 3: Список всех товаров -->
+      <div class="admin-tab-pane" id="adminTabProds" style="display: none;">
+        <div class="admin-prods-filter-row">
+          <input type="text" id="adminProdsSearchInput" class="form-control" placeholder="🔍 Поиск по названию или разделу..." oninput="filterAdminProductsList()">
+          <span class="admin-prods-total-badge" id="adminProdsTotalCount">0 товаров</span>
+        </div>
+
+        <div class="admin-prods-list-wrap" id="adminProdsListContainer">
+          <div class="loader-placeholder"><div class="spinner"></div></div>
         </div>
       </div>
 

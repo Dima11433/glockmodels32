@@ -964,16 +964,28 @@ async function refreshUserProfile() {
 // Отрисовка кнопки входа / профиля в шапке
 function renderAuthContainer() {
   const container = document.getElementById('authContainer');
+  const btnAdminHeader = document.getElementById('btnAdminPanel');
+  const btnAdminProfile = document.getElementById('btnAdminProfile');
+
+  if (state.user && state.user.is_admin) {
+    if (btnAdminHeader) btnAdminHeader.style.display = 'inline-flex';
+    if (btnAdminProfile) btnAdminProfile.style.display = 'flex';
+  } else {
+    if (btnAdminHeader) btnAdminHeader.style.display = 'none';
+    if (btnAdminProfile) btnAdminProfile.style.display = 'none';
+  }
+
   if (!container) return;
 
   if (state.user) {
     const displayName = state.user.username ? `@${state.user.username}` : `ID: ${state.user.id}`;
     const balanceFormatted = formatPrice(state.user.balance_cents);
+    const adminBadge = state.user.is_admin ? '<span style="color:#c084fc;font-size:10px;font-weight:700;margin-left:4px;">[ADMIN]</span>' : '';
     container.innerHTML = `
       <div class="user-chip" onclick="openProfileModal()">
         <div class="user-chip-avatar">👤</div>
         <div class="user-chip-meta">
-          <span class="user-chip-name">${escapeHtml(displayName)}</span>
+          <span class="user-chip-name">${escapeHtml(displayName)}${adminBadge}</span>
           <span class="user-chip-balance">${balanceFormatted}</span>
         </div>
       </div>
@@ -1519,4 +1531,691 @@ function escapeHtml(text) {
 function escapeAttr(text) {
   if (!text) return '';
   return String(text).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// ==========================================
+// ВЕБ-АДМИН-ПАНЕЛЬ (УПРАВЛЕНИЕ МАГАЗИНОМ)
+// ==========================================
+
+const adminState = {
+  activeTab: 'add',
+  pricingScope: 'all',
+  pricingOp: 'discount',
+  pricingPercent: 20,
+  products: [],
+  categories: [],
+  selectedPhotoFile: null
+};
+
+// Открытие модального окна админ-панели
+async function openAdminModal() {
+  if (!state.user) {
+    showToast('Сначала авторизуйтесь под аккаунтом администратора', 'warning');
+    openLoginModal();
+    return;
+  }
+
+  // Проверяем права на сервере
+  try {
+    const res = await apiFetch('/api/admin/check');
+    const data = await res.json();
+    if (!res.ok || !data.is_admin) {
+      showToast('Доступ запрещен: требуются права администратора (@ggg468q)', 'error');
+      return;
+    }
+  } catch (err) {
+    console.warn('Проверка админа:', err);
+  }
+
+  // Заполняем выпадающие списки категорий
+  populateAdminCategories();
+
+  // Загружаем товары для админки
+  await loadAdminProducts();
+
+  // Сбрасываем форму создания товара
+  resetAdminProductForm();
+
+  // Открываем модальное окно
+  openModal('adminModal');
+}
+
+// Переключение вкладок админ-панели
+function switchAdminTab(tabName) {
+  adminState.activeTab = tabName;
+
+  const btnAdd = document.getElementById('adminTabBtnAdd');
+  const btnDiscounts = document.getElementById('adminTabBtnDiscounts');
+  const btnProds = document.getElementById('adminTabBtnProds');
+
+  const paneAdd = document.getElementById('adminTabAdd');
+  const paneDiscounts = document.getElementById('adminTabDiscounts');
+  const paneProds = document.getElementById('adminTabProds');
+
+  [btnAdd, btnDiscounts, btnProds].forEach(b => b && b.classList.remove('active'));
+  [paneAdd, paneDiscounts, paneProds].forEach(p => p && (p.style.display = 'none'));
+
+  if (tabName === 'add') {
+    if (btnAdd) btnAdd.classList.add('active');
+    if (paneAdd) paneAdd.style.display = 'block';
+  } else if (tabName === 'discounts') {
+    if (btnDiscounts) btnDiscounts.classList.add('active');
+    if (paneDiscounts) paneDiscounts.style.display = 'block';
+    loadPricingSummary();
+  } else if (tabName === 'prods') {
+    if (btnProds) btnProds.classList.add('active');
+    if (paneProds) paneProds.style.display = 'block';
+    loadAdminProducts();
+  }
+}
+
+// Заполнение списков категорий
+function populateAdminCategories() {
+  const select = document.getElementById('adminProdCatSelect');
+  const discountCatSelect = document.getElementById('adminPricingCatSelect');
+
+  const cats = state.categories || [];
+  adminState.categories = cats;
+
+  let optionsHtml = '<option value="">Выберите раздел магазина...</option>';
+  cats.forEach(c => {
+    optionsHtml += `<option value="${c.id}">${escapeHtml(c.name)}</option>`;
+  });
+
+  if (select) select.innerHTML = optionsHtml;
+  if (discountCatSelect) discountCatSelect.innerHTML = optionsHtml;
+}
+
+// Сброс формы добавления товара
+function resetAdminProductForm() {
+  const form = document.getElementById('adminAddProdForm');
+  if (form) form.reset();
+
+  adminState.selectedPhotoFile = null;
+  const preview = document.getElementById('adminPhotoPreview');
+  const dropContent = document.getElementById('adminPhotoDropzoneContent');
+  if (preview) { preview.src = ''; preview.style.display = 'none'; }
+  if (dropContent) dropContent.style.display = 'block';
+
+  selectAdminKind('reusable');
+  previewAdminPriceRub();
+}
+
+// Выбор типа товара: reusable или oneoff
+function selectAdminKind(kind) {
+  const reusableCard = document.getElementById('kindRadioReusableCard');
+  const oneoffCard = document.getElementById('kindRadioOneoffCard');
+  const reusableBox = document.getElementById('adminContentReusableBox');
+  const oneoffBox = document.getElementById('adminContentOneoffBox');
+
+  const radReusable = document.querySelector('input[name="adminProdKind"][value="reusable"]');
+  const radOneoff = document.querySelector('input[name="adminProdKind"][value="oneoff"]');
+
+  if (kind === 'reusable') {
+    if (radReusable) radReusable.checked = true;
+    if (reusableCard) reusableCard.classList.add('active');
+    if (oneoffCard) oneoffCard.classList.remove('active');
+    if (reusableBox) reusableBox.style.display = 'block';
+    if (oneoffBox) oneoffBox.style.display = 'none';
+  } else {
+    if (radOneoff) radOneoff.checked = true;
+    if (oneoffCard) oneoffCard.classList.add('active');
+    if (reusableCard) reusableCard.classList.remove('active');
+    if (reusableBox) reusableBox.style.display = 'none';
+    if (oneoffBox) oneoffBox.style.display = 'block';
+  }
+}
+
+// Превью цены в рублях
+function previewAdminPriceRub() {
+  const input = document.getElementById('adminProdPriceInput');
+  const hint = document.getElementById('adminProdPriceRubHint');
+  if (!input || !hint) return;
+
+  const val = parseFloat(input.value) || 0;
+  const rub = Math.round(val * state.config.exchange_rate);
+  hint.innerText = `≈ ${rub.toLocaleString('ru-RU')} ₽ (по курсу ${state.config.exchange_rate})`;
+}
+
+// Выбор файла фото
+function handleAdminPhotoSelected(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  adminState.selectedPhotoFile = file;
+
+  const preview = document.getElementById('adminPhotoPreview');
+  const dropContent = document.getElementById('adminPhotoDropzoneContent');
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    if (preview) {
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+    }
+    if (dropContent) dropContent.style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+}
+
+// Отправка формы создания товара
+async function handleAdminAddProductSubmit(event) {
+  event.preventDefault();
+
+  const catSelect = document.getElementById('adminProdCatSelect');
+  const nameInput = document.getElementById('adminProdNameInput');
+  const descInput = document.getElementById('adminProdDescInput');
+  const priceInput = document.getElementById('adminProdPriceInput');
+  const kindInput = document.querySelector('input[name="adminProdKind"]:checked');
+  const contentInput = document.getElementById('adminProdContentInput');
+  const itemsInput = document.getElementById('adminProdItemsInput');
+  const submitBtn = document.getElementById('btnAdminSubmitProduct');
+
+  const categoryId = catSelect ? catSelect.value : '';
+  const name = nameInput ? nameInput.value.trim() : '';
+  const desc = descInput ? descInput.value.trim() : '';
+  const price = priceInput ? priceInput.value.trim() : '0';
+  const kind = kindInput ? kindInput.value : 'reusable';
+  const contentValue = (kind === 'reusable') ? (contentInput ? contentInput.value.trim() : '') : (itemsInput ? itemsInput.value.trim() : '');
+
+  if (!categoryId) {
+    showToast('Выберите раздел для товара', 'warning');
+    return;
+  }
+  if (!name) {
+    showToast('Введите название товара', 'warning');
+    return;
+  }
+  if (!price || parseFloat(price) <= 0) {
+    showToast('Укажите корректную цену товара', 'warning');
+    return;
+  }
+
+  try {
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerText = '⏳ Создание товара...';
+    }
+
+    const formData = new FormData();
+    formData.append('category_id', categoryId);
+    formData.append('name', name);
+    formData.append('description', desc);
+    formData.append('price', price);
+    formData.append('kind', kind);
+    formData.append('content_value', contentValue);
+
+    if (adminState.selectedPhotoFile) {
+      formData.append('photo', adminState.selectedPhotoFile);
+    }
+
+    const token = getAuthToken();
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch('/api/admin/product/add', {
+      method: 'POST',
+      headers: headers,
+      body: formData
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Ошибка при создании товара', 'error');
+      return;
+    }
+
+    showToast(`🎉 ${data.message || 'Товар успешно создан!'}`, 'success');
+
+    // Сбрасываем форму
+    resetAdminProductForm();
+
+    // Обновляем витрину и админ-товары
+    await loadCatalog();
+    await loadAdminProducts();
+
+    // Переключаемся на вкладку со списком товаров
+    switchAdminTab('prods');
+
+  } catch (err) {
+    console.error('Ошибка добавления товара:', err);
+    showToast('Сетевая ошибка при добавлении товара', 'error');
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerText = '🚀 Создать и опубликовать товар';
+    }
+  }
+}
+
+// ------------------------------------------
+// Управление ценами и скидками (как в боте)
+// ------------------------------------------
+
+function handlePricingScopeChange() {
+  const scope = document.getElementById('adminPricingScope').value;
+  adminState.pricingScope = scope;
+
+  const catWrap = document.getElementById('adminPricingCatWrap');
+  const prodWrap = document.getElementById('adminPricingProdWrap');
+
+  if (scope === 'all') {
+    if (catWrap) catWrap.style.display = 'none';
+    if (prodWrap) prodWrap.style.display = 'none';
+  } else if (scope === 'cat') {
+    if (catWrap) catWrap.style.display = 'block';
+    if (prodWrap) prodWrap.style.display = 'none';
+    populateAdminCategories();
+  } else if (scope === 'prod') {
+    if (catWrap) catWrap.style.display = 'none';
+    if (prodWrap) prodWrap.style.display = 'block';
+    populateAdminPricingProductsSelect();
+  }
+
+  loadPricingSummary();
+}
+
+function populateAdminPricingProductsSelect() {
+  const prodSelect = document.getElementById('adminPricingProdSelect');
+  if (!prodSelect) return;
+
+  const prods = adminState.products || state.products || [];
+  let html = '<option value="">Выберите товар...</option>';
+  prods.forEach(p => {
+    const priceStr = formatPrice(p.price_cents);
+    const discStr = (p.discount_pct && p.discount_pct > 0) ? ` 🔥 -${p.discount_pct}%` : '';
+    html += `<option value="${p.id}">${escapeHtml(p.name)} (${priceStr})${discStr}</option>`;
+  });
+  prodSelect.innerHTML = html;
+}
+
+function selectPricingOp(op) {
+  adminState.pricingOp = op;
+
+  const btnDiscount = document.getElementById('btnOpDiscount');
+  const btnMarkup = document.getElementById('btnOpMarkup');
+  const btnApply = document.getElementById('btnApplyPricing');
+  const label = document.getElementById('pricingPercentLabel');
+  const presetsRow = document.getElementById('pricingPresetsRow');
+
+  if (op === 'discount') {
+    if (btnDiscount) btnDiscount.classList.add('active');
+    if (btnMarkup) btnMarkup.classList.remove('active');
+    if (btnApply) btnApply.innerText = '✅ Применить скидку';
+    if (label) label.innerText = '3. Выберите или введите процент скидки (1-99%):';
+    if (presetsRow) {
+      presetsRow.innerHTML = `
+        <button type="button" class="preset-pct-btn" onclick="setPricingPercent(10)">-10%</button>
+        <button type="button" class="preset-pct-btn active" onclick="setPricingPercent(20)">-20%</button>
+        <button type="button" class="preset-pct-btn" onclick="setPricingPercent(30)">-30%</button>
+        <button type="button" class="preset-pct-btn" onclick="setPricingPercent(50)">-50%</button>
+      `;
+    }
+  } else {
+    if (btnMarkup) btnMarkup.classList.add('active');
+    if (btnDiscount) btnDiscount.classList.remove('active');
+    if (btnApply) btnApply.innerText = '✅ Применить повышение цен';
+    if (label) label.innerText = '3. Выберите или введите процент наценки (%):';
+    if (presetsRow) {
+      presetsRow.innerHTML = `
+        <button type="button" class="preset-pct-btn" onclick="setPricingPercent(10)">+10%</button>
+        <button type="button" class="preset-pct-btn active" onclick="setPricingPercent(25)">+25%</button>
+        <button type="button" class="preset-pct-btn" onclick="setPricingPercent(50)">+50%</button>
+        <button type="button" class="preset-pct-btn" onclick="setPricingPercent(100)">+100%</button>
+      `;
+    }
+  }
+  setPricingPercent(op === 'discount' ? 20 : 25);
+  loadPricingSummary();
+}
+
+function setPricingPercent(pct) {
+  adminState.pricingPercent = pct;
+  const input = document.getElementById('adminPricingPercentInput');
+  if (input) input.value = pct;
+
+  document.querySelectorAll('#pricingPresetsRow .preset-pct-btn').forEach(btn => {
+    const rawVal = parseInt(btn.innerText.replace(/[^0-9]/g, ''));
+    if (rawVal === pct) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  loadPricingSummary();
+}
+
+async function loadPricingSummary() {
+  const summaryBox = document.getElementById('adminPricingSummaryText');
+  if (!summaryBox) return;
+
+  const scope = document.getElementById('adminPricingScope').value;
+  let targetId = null;
+  if (scope === 'cat') {
+    const catSelect = document.getElementById('adminPricingCatSelect');
+    targetId = catSelect ? catSelect.value : null;
+  } else if (scope === 'prod') {
+    const prodSelect = document.getElementById('adminPricingProdSelect');
+    targetId = prodSelect ? prodSelect.value : null;
+  }
+
+  let queryUrl = '/api/admin/pricing/summary';
+  if (scope === 'prod' && targetId) queryUrl += `?product_id=${targetId}`;
+  if (scope === 'cat' && targetId) queryUrl += `?category_id=${targetId}`;
+
+  try {
+    const res = await apiFetch(queryUrl);
+    if (!res.ok) return;
+    const data = await res.json();
+    const stats = data.summary;
+
+    const pct = parseFloat(document.getElementById('adminPricingPercentInput').value) || adminState.pricingPercent;
+    const op = adminState.pricingOp;
+
+    let sampleLines = '';
+    if (stats.sample_products && stats.sample_products.length > 0) {
+      sampleLines = stats.sample_products.map(p => {
+        const curCents = p.price;
+        const oldCents = p.old_price;
+        const baseCents = (op === 'discount' && oldCents && oldCents > curCents) ? oldCents : curCents;
+        let newCents;
+        if (op === 'discount') {
+          newCents = Math.max(1, Math.round(baseCents * (1 - pct / 100)));
+        } else {
+          newCents = Math.max(1, Math.round(curCents * (1 + pct / 100)));
+        }
+        return `<div>• <b>${escapeHtml(p.name)}</b>: ${formatPrice(curCents)} ➔ <b style="color:#10b981;">${formatPrice(newCents)}</b></div>`;
+      }).join('');
+    }
+
+    summaryBox.innerHTML = `
+      <div>📦 <b>Товаров в выборке:</b> ${stats.total_count} шт. (со скидкой: ${stats.discounted_count} шт.)</div>
+      <div style="margin-top:6px;font-size:12px;color:var(--text-muted);">Пример пересчета:</div>
+      <div style="margin-top:4px;">${sampleLines || '• Нет товаров'}</div>
+    `;
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+async function executePricingApply() {
+  const scope = document.getElementById('adminPricingScope').value;
+  let targetId = null;
+  if (scope === 'cat') {
+    const catSelect = document.getElementById('adminPricingCatSelect');
+    targetId = catSelect ? catSelect.value : null;
+    if (!targetId) {
+      showToast('Выберите раздел для применения скидки', 'warning');
+      return;
+    }
+  } else if (scope === 'prod') {
+    const prodSelect = document.getElementById('adminPricingProdSelect');
+    targetId = prodSelect ? prodSelect.value : null;
+    if (!targetId) {
+      showToast('Выберите товар для изменения цены', 'warning');
+      return;
+    }
+  }
+
+  const pctInput = document.getElementById('adminPricingPercentInput');
+  const percent = parseFloat(pctInput ? pctInput.value : adminState.pricingPercent);
+  if (!percent || percent <= 0 || (adminState.pricingOp === 'discount' && percent >= 100)) {
+    showToast('Введите корректный процент (от 1 до 99)', 'warning');
+    return;
+  }
+
+  const opWord = adminState.pricingOp === 'discount' ? `скидку -${percent}%` : `наценку +${percent}%`;
+  if (!confirm(`Применить ${opWord} к выбранным товарам?`)) return;
+
+  const btnApply = document.getElementById('btnApplyPricing');
+  if (btnApply) btnApply.disabled = true;
+
+  try {
+    const res = await apiFetch('/api/admin/pricing/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: scope,
+        target_id: targetId,
+        op: adminState.pricingOp,
+        percent: percent
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Ошибка применения цен', 'error');
+      return;
+    }
+
+    showToast(data.message || 'Цены успешно обновлены! 🔥', 'success');
+
+    await loadCatalog();
+    await loadAdminProducts();
+    loadPricingSummary();
+
+  } catch (err) {
+    console.error('Ошибка применения цен:', err);
+    showToast('Сетевая ошибка', 'error');
+  } finally {
+    if (btnApply) btnApply.disabled = false;
+  }
+}
+
+async function executePricingReset() {
+  const scope = document.getElementById('adminPricingScope').value;
+  let targetId = null;
+  if (scope === 'cat') {
+    const catSelect = document.getElementById('adminPricingCatSelect');
+    targetId = catSelect ? catSelect.value : null;
+  } else if (scope === 'prod') {
+    const prodSelect = document.getElementById('adminPricingProdSelect');
+    targetId = prodSelect ? prodSelect.value : null;
+  }
+
+  if (!confirm('Сбросить скидки и вернуть исходные базовые цены?')) return;
+
+  try {
+    const res = await apiFetch('/api/admin/pricing/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: scope, target_id: targetId })
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Ошибка сброса скидок', 'error');
+      return;
+    }
+
+    showToast(data.message || 'Скидки сброшены! Исходные цены восстановлены.', 'success');
+
+    await loadCatalog();
+    await loadAdminProducts();
+    loadPricingSummary();
+
+  } catch (err) {
+    console.error('Ошибка сброса скидок:', err);
+    showToast('Сетевая ошибка', 'error');
+  }
+}
+
+// ------------------------------------------
+// Список всех товаров в админке
+// ------------------------------------------
+
+async function loadAdminProducts() {
+  const container = document.getElementById('adminProdsListContainer');
+  if (!container) return;
+
+  try {
+    const res = await apiFetch('/api/admin/products');
+    if (!res.ok) {
+      container.innerHTML = '<p class="empty-hint">Ошибка загрузки товаров</p>';
+      return;
+    }
+
+    const data = await res.json();
+    adminState.products = data.products || [];
+    renderAdminProductsList(adminState.products);
+
+  } catch (err) {
+    console.error('Ошибка loadAdminProducts:', err);
+    container.innerHTML = '<p class="empty-hint">Не удалось загрузить товары</p>';
+  }
+}
+
+function renderAdminProductsList(products) {
+  const container = document.getElementById('adminProdsListContainer');
+  const countBadge = document.getElementById('adminProdsTotalCount');
+  if (!container) return;
+
+  if (countBadge) countBadge.innerText = `${products.length} товаров`;
+
+  if (products.length === 0) {
+    container.innerHTML = '<p class="empty-hint">Товары не найдены</p>';
+    return;
+  }
+
+  container.innerHTML = products.map(p => {
+    let photo = (p.photos && p.photos[0]) ? p.photos[0] : 'web/img/product_placeholder.png';
+    if (photo.startsWith('/')) photo = photo.slice(1);
+
+    const isDiscounted = p.discount_pct && p.discount_pct > 0;
+    const discBadge = isDiscounted ? `<span class="badge badge-discount" style="font-size:10px;padding:2px 6px;">-${p.discount_pct}%</span>` : '';
+    const oldPriceHtml = isDiscounted ? `<span class="admin-prod-old-price">${formatPrice(p.old_price_cents)}</span>` : '';
+    const stockStr = (p.kind === 'oneoff') ? `Остаток: ${p.stock_count} шт.` : 'Многоразовый';
+
+    return `
+      <div class="admin-prod-item">
+        <img class="admin-prod-thumb" src="${photo}" alt="Фото">
+        <div class="admin-prod-info">
+          <div class="admin-prod-name">${escapeHtml(p.name)} ${discBadge}</div>
+          <div class="admin-prod-meta">
+            <span>📁 ${escapeHtml(p.category_name)}</span>
+            <span>•</span>
+            <span>📦 ${stockStr}</span>
+          </div>
+        </div>
+        <div class="admin-prod-prices">
+          ${oldPriceHtml}
+          <span class="admin-prod-cur-price">${formatPrice(p.price_cents)}</span>
+        </div>
+        <div class="admin-prod-actions">
+          <button class="btn-admin-act" onclick="quickProductDiscount(${p.id}, '${escapeAttr(p.name)}')">📉 Скидка</button>
+          ${isDiscounted ? `<button class="btn-admin-act" onclick="quickProductResetDiscount(${p.id}, '${escapeAttr(p.name)}')">🔄 Сброс</button>` : ''}
+          <button class="btn-admin-act btn-act-danger" onclick="quickProductDelete(${p.id}, '${escapeAttr(p.name)}')">🗑️</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function filterAdminProductsList() {
+  const query = (document.getElementById('adminProdsSearchInput').value || '').toLowerCase().trim();
+  if (!query) {
+    renderAdminProductsList(adminState.products);
+    return;
+  }
+  const filtered = adminState.products.filter(p => {
+    return p.name.toLowerCase().includes(query) || (p.category_name && p.category_name.toLowerCase().includes(query));
+  });
+  renderAdminProductsList(filtered);
+}
+
+// Быстрая скидка на конкретный товар
+async function quickProductDiscount(prodId, prodName) {
+  const rawPct = prompt(`Введите процент скидки для товара «${prodName}» (от 1 до 99%):`, '20');
+  if (!rawPct) return;
+
+  const pct = parseFloat(rawPct.replace('%', '').trim());
+  if (!pct || pct <= 0 || pct >= 100) {
+    showToast('Укажите процент от 1 до 99', 'warning');
+    return;
+  }
+
+  try {
+    const res = await apiFetch('/api/admin/pricing/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'prod',
+        target_id: prodId,
+        op: 'discount',
+        percent: pct
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Ошибка применения скидки', 'error');
+      return;
+    }
+
+    showToast(`Скидка -${pct}% успешно применена к «${prodName}»! 🔥`, 'success');
+    await loadCatalog();
+    await loadAdminProducts();
+
+  } catch (err) {
+    console.error(err);
+    showToast('Сетевая ошибка', 'error');
+  }
+}
+
+// Быстрый сброс скидки на конкретном товаре
+async function quickProductResetDiscount(prodId, prodName) {
+  if (!confirm(`Вернуть исходную цену для товара «${prodName}»?`)) return;
+
+  try {
+    const res = await apiFetch('/api/admin/pricing/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scope: 'prod',
+        target_id: prodId
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Ошибка сброса скидки', 'error');
+      return;
+    }
+
+    showToast(`Исходная цена для «${prodName}» восстановлена!`, 'success');
+    await loadCatalog();
+    await loadAdminProducts();
+
+  } catch (err) {
+    console.error(err);
+    showToast('Сетевая ошибка', 'error');
+  }
+}
+
+// Быстрое удаление товара
+async function quickProductDelete(prodId, prodName) {
+  if (!confirm(`Вы действительно хотите удалить товар «${prodName}» из каталога?`)) return;
+
+  try {
+    const res = await apiFetch('/api/admin/product/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_id: prodId })
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Ошибка при удалении товара', 'error');
+      return;
+    }
+
+    showToast(`Товар «${prodName}» удален из каталога`, 'info');
+    await loadCatalog();
+    await loadAdminProducts();
+
+  } catch (err) {
+    console.error(err);
+    showToast('Сетевая ошибка', 'error');
+  }
 }
