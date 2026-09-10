@@ -98,34 +98,44 @@ async function loadInitData() {
     const token = getAuthToken();
     const initUrl = token ? `/api/init?session_token=${encodeURIComponent(token)}` : '/api/init';
     const res = await apiFetch(initUrl);
-    if (!res.ok) throw new Error('Ошибка связи с сервером');
-    const data = await res.json();
-    
-    state.config.shop_title = data.shop_title || 'GLOCK SHOP';
-    state.config.bot_username = data.bot_username || '';
-    state.config.exchange_rate = data.exchange_rate || 90.0;
-    state.config.support_url = data.support_url || 'https://t.me/glock_admin_bot';
-    state.config.ton_wallet = data.ton_wallet || '';
+    if (res.ok) {
+      const data = await res.json();
+      state.config.shop_title = data.shop_title || 'GLOCK SHOP';
+      state.config.bot_username = data.bot_username || 'glock_models_bot';
+      state.config.exchange_rate = data.exchange_rate || 90.0;
+      state.config.support_url = data.support_url || 'https://t.me/glock_admin_bot';
+      state.config.ton_wallet = data.ton_wallet || '';
 
-    // Обновляем название магазина в шапке
-    const titleEl = document.getElementById('shopTitle');
-    if (titleEl) titleEl.innerText = state.config.shop_title;
+      const titleEl = document.getElementById('shopTitle');
+      if (titleEl) titleEl.innerText = state.config.shop_title;
 
-    // Если пользователь авторизован — обновляем состояние и профиль
-    if (data.user) {
-      state.user = data.user;
-      refreshUserProfile().catch(console.warn);
-    } else if (token) {
-      // Если токен был сохранен, но сервер его не распознал (сброс сессии)
-      setAuthToken(null);
-      state.user = null;
+      if (data.user) {
+        state.user = data.user;
+        refreshUserProfile().catch(console.warn);
+      } else if (token) {
+        setAuthToken(null);
+        state.user = null;
+      }
+      renderAuthContainer();
+      return;
     }
-    renderAuthContainer();
-
   } catch (err) {
-    console.error('Ошибка инициализации:', err);
-    showToast('Ошибка подключения к серверу магазина', 'error');
+    console.warn('[Init] Сервер API недоступен, режим статического каталога (GitHub Pages)');
   }
+
+  // Fallback для работы на GitHub Pages из catalog.json
+  try {
+    const res = await fetch('./catalog.json');
+    if (res.ok) {
+      const data = await res.json();
+      state.config.shop_title = data.shop_title || 'GLOCK SHOP';
+      state.config.bot_username = data.bot_username || 'glock_models_bot';
+      state.config.support_url = data.support_url || 'https://t.me/glock_admin_bot';
+      const titleEl = document.getElementById('shopTitle');
+      if (titleEl) titleEl.innerText = state.config.shop_title;
+    }
+  } catch (e) {}
+  renderAuthContainer();
 }
 
 // ==========================================
@@ -136,31 +146,47 @@ async function loadCatalog() {
   const grid = document.getElementById('productsGrid');
   try {
     const res = await apiFetch('/api/catalog');
-    if (!res.ok) throw new Error('Не удалось загрузить каталог');
-    const data = await res.json();
-
-    state.categories = data.categories || [];
-    state.products = data.products || [];
-
-    // Обновляем счетчики в Hero баннере
-    const catCountEl = document.getElementById('totalCatsCount');
-    const prodCountEl = document.getElementById('totalProdsCount');
-    if (catCountEl) catCountEl.innerText = state.categories.length;
-    if (prodCountEl) prodCountEl.innerText = state.products.length;
-
-    renderCategories();
-    renderProducts();
-
-  } catch (err) {
-    console.error('Ошибка загрузки каталога:', err);
-    if (grid) {
-      grid.innerHTML = `
-        <div class="empty-state">
-          <p>⚠️ Не удалось загрузить каталог товаров. Попробуйте обновить страницу.</p>
-        </div>
-      `;
+    if (res.ok) {
+      const data = await res.json();
+      state.categories = data.categories || [];
+      state.products = data.products || [];
+      updateCatalogCountsAndRender();
+      return;
     }
+  } catch (err) {
+    console.warn('[Catalog] API недоступен, загружаем статический catalog.json для GitHub Pages...');
   }
+
+  // Fallback для GitHub Pages: загрузка готового catalog.json из репозитория
+  try {
+    const res = await fetch('./catalog.json');
+    if (res.ok) {
+      const data = await res.json();
+      state.categories = data.categories || [];
+      state.products = data.products || [];
+      updateCatalogCountsAndRender();
+      return;
+    }
+  } catch (err) {
+    console.error('Ошибка загрузки catalog.json:', err);
+  }
+
+  if (grid) {
+    grid.innerHTML = `
+      <div class="empty-state">
+        <p>⚠️ Не удалось загрузить каталог товаров. Попробуйте обновить страницу.</p>
+      </div>
+    `;
+  }
+}
+
+function updateCatalogCountsAndRender() {
+  const catCountEl = document.getElementById('totalCatsCount');
+  const prodCountEl = document.getElementById('totalProdsCount');
+  if (catCountEl) catCountEl.innerText = state.categories.length;
+  if (prodCountEl) prodCountEl.innerText = state.products.length;
+  renderCategories();
+  renderProducts();
 }
 
 function renderCategories() {
@@ -311,7 +337,7 @@ function renderProducts() {
   }
 
   grid.innerHTML = filtered.map(prod => {
-    const photo = (prod.photos && prod.photos[0]) ? prod.photos[0] : '/static/img/product_placeholder.png';
+    const photo = (prod.photos && prod.photos[0]) ? (prod.photos[0].startsWith('/') ? prod.photos[0].slice(1) : prod.photos[0]) : 'web/img/product_placeholder.png';
     const priceStr = formatPrice(prod.price_cents);
     const oldPriceStr = prod.old_price_cents ? formatPrice(prod.old_price_cents) : '';
     
@@ -341,7 +367,7 @@ function renderProducts() {
     return `
       <div class="product-card" onclick="openProductModal(${prod.id})">
         <div class="card-image-wrap">
-          <img src="${photo}" alt="${escapeHtml(prod.name)}" loading="lazy" onerror="this.src='/static/img/product_placeholder.png'">
+          <img src="${photo}" alt="${escapeHtml(prod.name)}" loading="lazy" onerror="this.src='web/img/product_placeholder.png'">
           <div class="card-badges">
             ${packBadge}
             ${badgeHtml}
@@ -379,7 +405,8 @@ function openProductModal(prodId) {
 
   // Фото
   const imgEl = document.getElementById('modalProductImg');
-  const photo = (prod.photos && prod.photos[0]) ? prod.photos[0] : '/static/img/product_placeholder.png';
+  let photo = (prod.photos && prod.photos[0]) ? prod.photos[0] : 'web/img/product_placeholder.png';
+  if (photo.startsWith('/')) photo = photo.slice(1);
   if (imgEl) imgEl.src = photo;
 
   // Название и описание
@@ -392,11 +419,14 @@ function openProductModal(prodId) {
   const badgesEl = document.getElementById('modalBadges');
   if (badgesEl) {
     let bHtml = '';
+    if (prod.category_name) {
+      bHtml += `<span class="badge badge-pack">${escapeHtml(prod.category_name)}</span>`;
+    }
     if (prod.discount_pct > 0) {
-      bHtml += `<span class="badge badge-discount">Скидка -${prod.discount_pct}%</span>`;
+      bHtml += `<span class="badge badge-discount">-${prod.discount_pct}%</span>`;
     }
     if (prod.in_stock) {
-      const cnt = prod.kind === 'oneoff' ? ` (${prod.stock_count} шт.)` : '';
+      const cnt = (prod.stock_count && prod.stock_count < 900) ? ` (${prod.stock_count} шт.)` : '';
       bHtml += `<span class="badge badge-stock">В наличии${cnt}</span>`;
     } else {
       bHtml += `<span class="badge badge-out">Товар распродан</span>`;
@@ -426,6 +456,13 @@ function openProductModal(prodId) {
     } else {
       oldPriceEl.innerText = '';
     }
+  }
+
+  // Кнопка перехода в Telegram-бота
+  const tgBtn = document.getElementById('btnBuyTelegramBot');
+  if (tgBtn) {
+    const botUser = state.config.bot_username || 'glock_models_bot';
+    tgBtn.href = `https://t.me/${botUser}?start=prod_${prod.id}`;
   }
 
   // Кнопка покупки с баланса

@@ -1127,6 +1127,9 @@ async def handle_photo_proxy(request: web.Request):
 
 async def handle_index(request: web.Request):
     """Отдает главную страницу сайта."""
+    root_index = BASE_DIR / "index.html"
+    if root_index.exists():
+        return web.FileResponse(root_index)
     index_file = BASE_DIR / "web" / "index.html"
     return web.FileResponse(index_file)
 
@@ -1277,6 +1280,8 @@ def create_app() -> web.Application:
     web_dir = BASE_DIR / "web"
     web_dir.mkdir(exist_ok=True)
     app.router.add_static("/static/", path=str(web_dir), name="static")
+    app.router.add_static("/web/", path=str(web_dir), name="web")
+    app.router.add_get("/catalog.json", lambda r: web.FileResponse(BASE_DIR / "catalog.json"))
 
     # Главная страница
     app.router.add_get("/", handle_index)
