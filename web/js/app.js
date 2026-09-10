@@ -511,7 +511,7 @@ function renderProducts() {
               ${oldPriceStr ? `<span class="price-old">${oldPriceStr}</span>` : ''}
             </div>
             <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openProductModal(${prod.id})">
-              Купить
+              ${prod.price_cents === 0 ? 'Забрать' : 'Купить'}
             </button>
           </div>
         </div>
@@ -600,7 +600,11 @@ function openProductModal(prodId) {
       buyBtn.className = 'btn btn-outline btn-block disabled';
     } else if (!state.user) {
       buyBtn.disabled = false;
-      buyBtn.innerText = '✈️ Войти для покупки';
+      buyBtn.innerText = finalCents === 0 ? '🎁 Войти и забрать бесплатно' : '✈️ Войти для покупки';
+      buyBtn.className = 'btn btn-primary btn-block';
+    } else if (finalCents === 0) {
+      buyBtn.disabled = false;
+      buyBtn.innerText = '🎁 Забрать бесплатно';
       buyBtn.className = 'btn btn-primary btn-block';
     } else if (state.user.balance_cents < finalCents) {
       const diffCents = finalCents - state.user.balance_cents;
@@ -1523,6 +1527,9 @@ function applyCurrencyButtons() {
 }
 
 function formatPrice(cents) {
+  if (!cents || cents <= 0) {
+    return state.currency === 'RUB' ? '0 ₽' : '$0';
+  }
   if (state.currency === 'RUB') {
     const rub = Math.round(cents * state.config.exchange_rate / 100);
     return `${rub.toLocaleString('ru-RU')} ₽`;
