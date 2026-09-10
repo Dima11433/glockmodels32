@@ -234,12 +234,20 @@ async def handle_init(request: web.Request):
                 "is_admin": is_adm,
             }
 
+    tunnel_url = ""
+    if (BASE_DIR / "tunnel_url.txt").exists():
+        try:
+            tunnel_url = (BASE_DIR / "tunnel_url.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
     return web.json_response({
         "shop_title": shop_title,
         "bot_username": config.bot_username,
         "exchange_rate": texts.EXCHANGE_RATE,
         "support_url": support_url,
         "ton_wallet": wallet_addr,
+        "api_url": tunnel_url,
         "user": user_info,
     })
 
@@ -1268,10 +1276,18 @@ async def export_catalog_json() -> bool:
             }
             products.append(prod_entry)
 
+        tunnel_url = ""
+        if (BASE_DIR / "tunnel_url.txt").exists():
+            try:
+                tunnel_url = (BASE_DIR / "tunnel_url.txt").read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+
         data = {
             "shop_title": await db.get_setting("shop_title") or "GLOCK SHOP",
             "support_url": await db.get_setting("link:support_url") or "https://t.me/glock_admin_bot",
             "bot_username": config.bot_username or "glock_models_bot",
+            "api_url": tunnel_url,
             "categories": categories,
             "products": products
         }
@@ -1658,8 +1674,31 @@ async def on_cleanup(app: web.Application):
     logger.info("Соединения базы данных и платежей закрыты.")
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    origin = request.headers.get("Origin") or "*"
+    if request.method == "OPTIONS":
+        response = web.Response(status=200, text="")
+    else:
+        try:
+            response = await handler(request)
+        except web.HTTPException as ex:
+            response = ex
+        except Exception as e:
+            logger.exception(f"Необработанная ошибка {request.method} {request.path}: {e}")
+            response = web.json_response({"error": "Внутренняя ошибка сервера"}, status=500)
+
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept, Origin"
+    if origin != "*":
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Max-Age"] = "86400"
+    return response
+
+
 def create_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 

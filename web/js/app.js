@@ -50,6 +50,85 @@ function setAuthToken(token) {
   }
 }
 
+// Определение базового адреса API для работы на GitHub Pages и локально
+function getApiBaseUrl() {
+  // 1. Параметр ?api=... в URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const qApi = urlParams.get('api');
+  if (qApi) {
+    const clean = qApi.replace(/\/+$/, '');
+    localStorage.setItem('glock_api_base', clean);
+    return clean;
+  }
+
+  // 2. Сохраненный в настройках браузера адрес
+  const saved = localStorage.getItem('glock_api_base');
+  if (saved) return saved.replace(/\/+$/, '');
+
+  // 3. Локальный запуск (localhost / 127.0.0.1)
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '') {
+    return '';
+  }
+
+  // 4. Адрес из статического catalog.json
+  if (state.config && state.config.api_url) {
+    return state.config.api_url.replace(/\/+$/, '');
+  }
+
+  // 5. Дефолтный активный туннель
+  return 'https://99d5307edf9dc9.lhr.life';
+}
+
+function setApiBaseUrl(url) {
+  if (url) {
+    localStorage.setItem('glock_api_base', url.trim().replace(/\/+$/, ''));
+  } else {
+    localStorage.removeItem('glock_api_base');
+  }
+}
+
+function updateApiStatusLabel() {
+  const label = document.getElementById('apiHostLabel');
+  if (!label) return;
+  const base = getApiBaseUrl();
+  if (!base) {
+    label.innerText = 'localhost:8000';
+  } else {
+    try {
+      const u = new URL(base);
+      label.innerText = u.hostname;
+    } catch {
+      label.innerText = base;
+    }
+  }
+}
+
+function promptChangeApiUrl() {
+  const current = getApiBaseUrl() || 'https://99d5307edf9dc9.lhr.life';
+  const input = prompt('Адрес бэкенда для связи с Telegram-ботом:\n(Оставьте пустым для сброса на дефолтный)', current);
+  if (input !== null) {
+    setApiBaseUrl(input.trim());
+    showToast('Адрес сервера сохранён!', 'info');
+    updateApiStatusLabel();
+    loadInitData();
+    loadCatalog();
+  }
+}
+
+function resolveProductPhoto(raw) {
+  if (!raw) return 'web/img/product_placeholder.png';
+  if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:')) {
+    return raw;
+  }
+  let path = raw.startsWith('/') ? raw.slice(1) : raw;
+  if (path.startsWith('api/')) {
+    const base = getApiBaseUrl();
+    return base ? `${base}/${path}` : path;
+  }
+  return path;
+}
+
 async function apiFetch(url, options = {}) {
   const opts = { ...options };
   const headers = { ...(opts.headers || {}) };
@@ -58,8 +137,16 @@ async function apiFetch(url, options = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
   opts.headers = headers;
-  opts.credentials = 'include';
-  return fetch(url, opts);
+
+  let fullUrl = url;
+  if (url.startsWith('/api') || url.startsWith('/photos')) {
+    const base = getApiBaseUrl();
+    if (base) {
+      fullUrl = `${base}${url}`;
+    }
+  }
+
+  return fetch(fullUrl, opts);
 }
 
 // ==========================================
@@ -82,14 +169,46 @@ async function initApp() {
   // 2. Устанавливаем валюту в UI
   applyCurrencyButtons();
 
-  // 3. Загружаем системные параметры и пользователя (с автовосстановлением сессии)
+  // 3. Мгновенно загружаем локальный catalog.json для быстрого отображения витрины
+  await loadCatalogStatic();
+
+  // 4. Обновляем метку статуса сервера
+  updateApiStatusLabel();
+
+  // 5. Загружаем системные параметры и пользователя (с автовосстановлением сессии через бэкенд)
   await loadInitData();
 
-  // 4. Загружаем каталог товаров
+  // 6. Обновляем каталог через бэкенд (если сервер доступен)
   await loadCatalog();
 
-  // 5. Регистрируем Telegram Auth Callback
+  // 7. Регистрируем Telegram Auth Callback
   window.onTelegramAuth = handleTelegramAuthCallback;
+}
+
+// Предзагрузка статического catalog.json
+async function loadCatalogStatic() {
+  try {
+    const res = await fetch('./catalog.json');
+    if (res.ok) {
+      const data = await res.json();
+      state.config.shop_title = data.shop_title || state.config.shop_title;
+      state.config.bot_username = data.bot_username || state.config.bot_username;
+      state.config.support_url = data.support_url || state.config.support_url;
+      if (data.api_url) {
+        state.config.api_url = data.api_url;
+      }
+      const titleEl = document.getElementById('shopTitle');
+      if (titleEl) titleEl.innerText = state.config.shop_title;
+
+      if (!state.categories || state.categories.length === 0) {
+        state.categories = data.categories || [];
+        state.products = data.products || [];
+        updateCatalogCountsAndRender();
+      }
+    }
+  } catch (e) {
+    console.warn('[CatalogStatic] Ошибка предзагрузки catalog.json:', e);
+  }
 }
 
 // Загрузка начальных параметров магазина и сессии
@@ -105,6 +224,9 @@ async function loadInitData() {
       state.config.exchange_rate = data.exchange_rate || 90.0;
       state.config.support_url = data.support_url || 'https://t.me/glock_admin_bot';
       state.config.ton_wallet = data.ton_wallet || '';
+      if (data.api_url && !localStorage.getItem('glock_api_base')) {
+        state.config.api_url = data.api_url;
+      }
 
       const titleEl = document.getElementById('shopTitle');
       if (titleEl) titleEl.innerText = state.config.shop_title;
@@ -117,10 +239,11 @@ async function loadInitData() {
         state.user = null;
       }
       renderAuthContainer();
+      updateApiStatusLabel();
       return;
     }
   } catch (err) {
-    console.warn('[Init] Сервер API недоступен, режим статического каталога (GitHub Pages)');
+    console.warn('[Init] Сервер API недоступен, режим статического каталога (GitHub Pages):', err);
   }
 
   // Fallback для работы на GitHub Pages из catalog.json
@@ -131,11 +254,15 @@ async function loadInitData() {
       state.config.shop_title = data.shop_title || 'GLOCK SHOP';
       state.config.bot_username = data.bot_username || 'glock_models_bot';
       state.config.support_url = data.support_url || 'https://t.me/glock_admin_bot';
+      if (data.api_url) {
+        state.config.api_url = data.api_url;
+      }
       const titleEl = document.getElementById('shopTitle');
       if (titleEl) titleEl.innerText = state.config.shop_title;
     }
   } catch (e) {}
   renderAuthContainer();
+  updateApiStatusLabel();
 }
 
 // ==========================================
@@ -337,7 +464,7 @@ function renderProducts() {
   }
 
   grid.innerHTML = filtered.map(prod => {
-    const photo = (prod.photos && prod.photos[0]) ? (prod.photos[0].startsWith('/') ? prod.photos[0].slice(1) : prod.photos[0]) : 'web/img/product_placeholder.png';
+    const photo = resolveProductPhoto(prod.photos && prod.photos[0]);
     const priceStr = formatPrice(prod.price_cents);
     const oldPriceStr = prod.old_price_cents ? formatPrice(prod.old_price_cents) : '';
     
@@ -405,8 +532,7 @@ function openProductModal(prodId) {
 
   // Фото
   const imgEl = document.getElementById('modalProductImg');
-  let photo = (prod.photos && prod.photos[0]) ? prod.photos[0] : 'web/img/product_placeholder.png';
-  if (photo.startsWith('/')) photo = photo.slice(1);
+  let photo = resolveProductPhoto(prod.photos && prod.photos[0]);
   if (imgEl) imgEl.src = photo;
 
   // Название и описание
@@ -1092,7 +1218,12 @@ async function handleSendCode() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier: rawVal })
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      throw new Error(`Сервер вернул статус ${res.status}. Проверьте подключение к бэкенду.`);
+    }
 
     if (!res.ok || data.error) {
       showToast(data.error || 'Не удалось отправить код', 'error');
@@ -1126,7 +1257,7 @@ async function handleSendCode() {
 
   } catch (err) {
     console.error('Ошибка запроса кода:', err);
-    showToast('Ошибка при запросе кода. Попробуйте еще раз', 'error');
+    showToast(err.message || 'Ошибка при запросе кода. Проверьте соединение с сервером', 'error');
   } finally {
     if (btnSend) {
       btnSend.disabled = false;
@@ -1204,7 +1335,12 @@ async function handleVerifyCode() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const data = await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch (parseErr) {
+      throw new Error(`Сервер вернул статус ${res.status}. Проверьте подключение к бэкенду.`);
+    }
 
     if (!res.ok || data.error) {
       showToast(data.error || 'Неверный код подтверждения', 'error');
