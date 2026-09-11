@@ -2,7 +2,8 @@
  * GLOCK MODELS AGENCY — 3D Runway Haute Couture Model & Catwalk Scene
  * Built with Three.js (r128) + GSAP
  * High-Fashion Aesthetics: Statuesque Runway Model Mannequin, Mirror Catwalk Podium,
- * Floating Silk Ribbon, Orbiting Agency Lookbook Cards, Studio Rim Lights & Paparazzi Flashes.
+ * Seamless Continuous Spline Arms & Curves, Silk Ribbon, Orbiting Lookbook Cards,
+ * Studio Rim Lighting & Full Responsive Mobile Adaptation.
  */
 
 (function () {
@@ -57,10 +58,10 @@
       ambient: 0x1f0e1a,
       light: 0xfb7185,
       gold: 0xfbbf24,
-      modelColor: 0x22131d,
-      modelEmissive: 0x2a0d1e,
-      roughness: 0.18,
-      metalness: 0.85,
+      modelColor: 0x24121f,
+      modelEmissive: 0x2e0c20,
+      roughness: 0.16,
+      metalness: 0.86,
       name: 'Rose Gold'
     },
     diamond: {
@@ -81,8 +82,8 @@
       gold: 0xf59e0b,
       modelColor: 0x240910,
       modelEmissive: 0x2f0813,
-      roughness: 0.16,
-      metalness: 0.86,
+      roughness: 0.15,
+      metalness: 0.88,
       name: 'Ruby Passion'
     },
     emerald: {
@@ -92,8 +93,8 @@
       gold: 0xfcd34d,
       modelColor: 0x081b13,
       modelEmissive: 0x062419,
-      roughness: 0.18,
-      metalness: 0.88,
+      roughness: 0.17,
+      metalness: 0.89,
       name: 'Emerald VIP'
     }
   };
@@ -107,7 +108,7 @@
   try {
     init();
     animate();
-    console.log('[3D Models] Runway Haute Couture scene successfully loaded and running!');
+    console.log('[3D Models] Haute Couture Runway Scene initialized successfully!');
   } catch (err) {
     console.error('[3D Models] Init Error:', err);
   }
@@ -115,15 +116,18 @@
   function init() {
     const width = window.innerWidth || 800;
     const height = window.innerHeight || 600;
+    const isMobile = width < 768;
 
     // 1. Сцена
     scene = new THREE.Scene();
 
-    // 2. Камера (Fashion Hero angle)
+    // 2. Камера (адаптированная под мобильные и десктоп)
     const aspect = width / height;
-    camera = new THREE.PerspectiveCamera(40, aspect, 0.1, 100);
-    const cameraZ = width < 768 ? 6.8 : 5.6;
-    camera.position.set(0, 0.3, cameraZ);
+    camera = new THREE.PerspectiveCamera(42, aspect, 0.1, 100);
+    // На мобильных увеличиваем дистанцию, чтобы модель полностью помещалась в кадр
+    const cameraZ = isMobile ? 7.6 : (width < 1024 ? 6.4 : 5.6);
+    const cameraY = isMobile ? 0.05 : 0.25;
+    camera.position.set(0, cameraY, cameraZ);
 
     // 3. Рендерер
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -137,51 +141,49 @@
     const curTheme = THEMES[activeThemeKey];
 
     // 4. Студийный свет высокой моды
-    const ambientLight = new THREE.AmbientLight(curTheme.ambient, 2.5);
+    const ambientLight = new THREE.AmbientLight(curTheme.ambient, 2.6);
     scene.add(ambientLight);
 
     keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
     keyLight.position.set(3, 5, 4);
     scene.add(keyLight);
 
-    fillLight = new THREE.DirectionalLight(curTheme.light, 1.5);
+    fillLight = new THREE.DirectionalLight(curTheme.light, 1.6);
     fillLight.position.set(-4, -1, 3);
     scene.add(fillLight);
 
-    rimLight1 = new THREE.PointLight(curTheme.accent, 4.5, 20);
+    rimLight1 = new THREE.PointLight(curTheme.accent, 4.8, 20);
     rimLight1.position.set(2.8, 1.2, -2.2);
     scene.add(rimLight1);
 
-    rimLight2 = new THREE.PointLight(curTheme.light, 3.5, 20);
+    rimLight2 = new THREE.PointLight(curTheme.light, 3.8, 20);
     rimLight2.position.set(-2.8, 0.5, -2.2);
     scene.add(rimLight2);
 
-    floorLight = new THREE.PointLight(curTheme.accent, 2.0, 10);
+    floorLight = new THREE.PointLight(curTheme.accent, 2.2, 10);
     floorLight.position.set(0, -1.8, 0.5);
     scene.add(floorLight);
 
-    paparazziFlash = new THREE.PointLight(0xffffff, 0, 18);
+    paparazziFlash = new THREE.PointLight(0xffffff, 0, 20);
     paparazziFlash.position.set(-3, 2, -1);
     scene.add(paparazziFlash);
 
-    // 5. Главная группа сцены
+    // 5. Главная группа сцены (адаптивное позиционирование)
     mainGroup = new THREE.Group();
-    // На широких экранах модель стоит с правой стороны от текста карточки Hero
-    const defaultX = width >= 1100 ? 1.6 : (width >= 850 ? 1.2 : 0);
-    mainGroup.position.set(defaultX, -0.05, 0);
+    applyResponsiveLayout(width);
     scene.add(mainGroup);
 
     // 6. Зеркальный подиум (Catwalk Mirror Runway)
     createCatwalkPodium(curTheme);
 
-    // 7. Подиумная модель (Haute Couture 3D Mannequin)
+    // 7. Подиумная модель (Haute Couture Mannequin с бесшовными анатомичными руками)
     createFashionModel(curTheme);
 
     // 8. Развевающаяся шёлковая лента (Floating Silk Ribbon)
     createSilkRibbon(curTheme);
 
     // 9. Парящие карточки лукбука (Orbiting Agency Lookbook Cards)
-    createLookbookCards(curTheme);
+    createLookbookCards(curTheme, isMobile);
 
     // 10. Атмосферная золотистая пыльца (Backstage Glitter Dust)
     createGlitterDust(curTheme);
@@ -194,6 +196,28 @@
 
     window.setAgency3DTheme = setAgency3DTheme;
     updateActiveThemeButtons(activeThemeKey);
+  }
+
+  // Адаптивное позиционирование и масштаб главной группы
+  function applyResponsiveLayout(width) {
+    if (!mainGroup) return;
+    if (width < 600) {
+      // Мобильный телефон: модель по центру, уменьшенный масштаб для 100% видимости
+      mainGroup.position.set(0, -0.25, 0);
+      mainGroup.scale.setScalar(0.74);
+    } else if (width < 900) {
+      // Планшет
+      mainGroup.position.set(0.6, -0.15, 0);
+      mainGroup.scale.setScalar(0.85);
+    } else if (width < 1200) {
+      // Ноутбук
+      mainGroup.position.set(1.35, -0.05, 0);
+      mainGroup.scale.setScalar(0.95);
+    } else {
+      // Большой десктоп: модель с правой стороны от Hero-баннера
+      mainGroup.position.set(1.65, 0, 0);
+      mainGroup.scale.setScalar(1.0);
+    }
   }
 
   // ==========================================
@@ -257,182 +281,206 @@
   }
 
   // ==========================================
-  // ПОДИУМНАЯ 3D МОДЕЛЬ (HAUTE COUTURE MANNEQUIN)
+  // ПОДИУМНАЯ 3D МОДЕЛЬ С КРАСИВЫМИ СГЛАЖЕННЫМИ РУКАМИ
   // ==========================================
   function createFashionModel(theme) {
     try {
       modelGroup = new THREE.Group();
       modelGroup.position.set(0, -0.15, 0);
 
+      // Люксовый гладкий материал манекена
       const modelMat = new THREE.MeshPhysicalMaterial({
         color: theme.modelColor,
         emissive: theme.modelEmissive,
         roughness: theme.roughness,
         metalness: theme.metalness,
         clearcoat: 1.0,
-        clearcoatRoughness: 0.1,
+        clearcoatRoughness: 0.08,
         reflectivity: 0.95,
         side: THREE.DoubleSide
       });
       modelMaterials.push(modelMat);
 
-      // 1. ГОЛОВА И ПРИЧЕСКА
-      const headGroup = new THREE.Group();
-      headGroup.position.y = 1.95;
-
-      const headGeo = new THREE.SphereGeometry(0.22, 32, 24);
-      headGeo.scale(0.85, 1.15, 0.92);
-      const head = new THREE.Mesh(headGeo, modelMat);
-      headGroup.add(head);
-
-      const hairGeo = new THREE.SphereGeometry(0.17, 24, 18);
-      hairGeo.scale(0.9, 1.0, 1.15);
-      const hair = new THREE.Mesh(hairGeo, modelMat);
-      hair.position.set(0, 0.08, -0.11);
-      headGroup.add(hair);
-
-      const neckGeo = new THREE.CylinderGeometry(0.085, 0.11, 0.35, 24);
-      const neck = new THREE.Mesh(neckGeo, modelMat);
-      neck.position.y = 1.68;
-      modelGroup.add(neck);
-
-      const chokerGeo = new THREE.TorusGeometry(0.105, 0.018, 16, 32);
-      const chokerMat = new THREE.MeshStandardMaterial({
+      // Золотой металл для украшений (чокер, пояс, браслеты, туфли)
+      const goldMat = new THREE.MeshStandardMaterial({
         color: theme.gold,
         metalness: 0.95,
         roughness: 0.15
       });
-      modelGroup.chokerMat = chokerMat;
-      const choker = new THREE.Mesh(chokerGeo, chokerMat);
+      modelGroup.goldMat = goldMat;
+
+      // 1. ГОЛОВА, ШЕЯ И ПРИЧЕСКА
+      const headGroup = new THREE.Group();
+      headGroup.position.y = 1.95;
+
+      // Изящная овальная голова супермодели
+      const headGeo = new THREE.SphereGeometry(0.21, 32, 24);
+      headGeo.scale(0.85, 1.15, 0.92);
+      const head = new THREE.Mesh(headGeo, modelMat);
+      headGroup.add(head);
+
+      // Гладкий высокий подиумный пучок (Chignon)
+      const hairGeo = new THREE.SphereGeometry(0.16, 24, 18);
+      hairGeo.scale(0.9, 0.95, 1.15);
+      const hair = new THREE.Mesh(hairGeo, modelMat);
+      hair.position.set(0, 0.08, -0.12);
+      headGroup.add(hair);
+
+      // Лебединая шея (плавный конус)
+      const neckGeo = new THREE.CylinderGeometry(0.08, 0.105, 0.36, 32);
+      const neck = new THREE.Mesh(neckGeo, modelMat);
+      neck.position.y = 1.68;
+      modelGroup.add(neck);
+
+      // Золотой чокер на шее
+      const chokerGeo = new THREE.TorusGeometry(0.098, 0.016, 16, 36);
+      const choker = new THREE.Mesh(chokerGeo, goldMat);
       choker.rotation.x = Math.PI / 2;
       choker.position.y = 1.65;
       modelGroup.add(choker);
 
       modelGroup.add(headGroup);
 
-      // 2. ИЗЯЩНОЕ ТОРСО И КОРСЕТ (точки от низа к верху)
-      const curvePoints = [
-        new THREE.Vector2(0.28, 0.32),
-        new THREE.Vector2(0.36, 0.44),
-        new THREE.Vector2(0.38, 0.58),
-        new THREE.Vector2(0.29, 0.76),
-        new THREE.Vector2(0.21, 0.92),
-        new THREE.Vector2(0.28, 1.08),
-        new THREE.Vector2(0.36, 1.22),
-        new THREE.Vector2(0.34, 1.34),
-        new THREE.Vector2(0.38, 1.44),
-        new THREE.Vector2(0.12, 1.52)
+      // 2. ИЗЯЩНОЕ ИДЕАЛЬНО СГЛАЖЕННОЕ ТОРСО (БЕЗ УГЛОВ И ШВОВ)
+      // Используем SplineCurve для непрерывных математических кривых женского тела
+      const rawBodyPoints = [
+        new THREE.Vector2(0.26, 0.28), // Схождение к бедрам
+        new THREE.Vector2(0.35, 0.42), // Нижняя линия бедер
+        new THREE.Vector2(0.39, 0.58), // Выраженная линия бедер (Haute Couture silhouette)
+        new THREE.Vector2(0.31, 0.74), // Плавный переход
+        new THREE.Vector2(0.215, 0.92), // Узкая осиная талия (cinched waist)
+        new THREE.Vector2(0.25, 1.04), // Под грудью
+        new THREE.Vector2(0.355, 1.18), // Бюст
+        new THREE.Vector2(0.35, 1.28), // Верх груди
+        new THREE.Vector2(0.31, 1.37), // Ключичная зона
+        new THREE.Vector2(0.375, 1.44), // Плечи
+        new THREE.Vector2(0.18, 1.50), // Трапеции
+        new THREE.Vector2(0.085, 1.54) // Основание шеи
       ];
-      const torsoGeo = new THREE.LatheGeometry(curvePoints, 40);
+      const bodySpline = new THREE.SplineCurve(rawBodyPoints);
+      const smoothBodyPoints = bodySpline.getPoints(80); // 80 идеально сглаженных точек
+      const torsoGeo = new THREE.LatheGeometry(smoothBodyPoints, 64);
       torsoGeo.scale(1.0, 1.0, 0.72);
+      torsoGeo.computeVertexNormals();
       const torso = new THREE.Mesh(torsoGeo, modelMat);
       torso.position.y = 0.05;
       modelGroup.add(torso);
 
-      // Золотой пояс
-      const waistBeltGeo = new THREE.TorusGeometry(0.23, 0.02, 16, 36);
+      // Золотой пояс на талии
+      const waistBeltGeo = new THREE.TorusGeometry(0.23, 0.018, 16, 48);
       waistBeltGeo.scale(1.0, 0.7, 1.0);
-      const waistBelt = new THREE.Mesh(waistBeltGeo, chokerMat);
+      const waistBelt = new THREE.Mesh(waistBeltGeo, goldMat);
       waistBelt.rotation.x = Math.PI / 2;
       waistBelt.position.y = 0.97;
       modelGroup.add(waistBelt);
 
-      // 3. РУКИ В ПОДИУМНОЙ ПОЗЕ
-      const leftArmGroup = new THREE.Group();
-      leftArmGroup.position.set(0.36, 1.40, 0);
+      // 3. БЕСШОВНЫЕ ИЗЯЩНЫЕ РУКИ (НЕПРЕРЫВНЫЕ 3D СПЛАЙНЫ TUBEGEOMETRY)
+      // Больше никаких рубленых цилиндров и щелей!
 
-      const leftUpperArmGeo = new THREE.CylinderGeometry(0.06, 0.05, 0.52, 18);
-      const leftUpperArm = new THREE.Mesh(leftUpperArmGeo, modelMat);
-      leftUpperArm.position.set(0.12, -0.22, 0.05);
-      leftUpperArm.rotation.z = -0.55;
-      leftUpperArm.rotation.x = 0.2;
-      leftArmGroup.add(leftUpperArm);
+      // Плечевые гладкие суставы-сферы
+      const shoulderGeo = new THREE.SphereGeometry(0.072, 24, 20);
+      const leftShoulderMesh = new THREE.Mesh(shoulderGeo, modelMat);
+      leftShoulderMesh.position.set(0.36, 1.42, 0);
+      modelGroup.add(leftShoulderMesh);
 
-      const leftForearmGeo = new THREE.CylinderGeometry(0.05, 0.04, 0.48, 18);
-      const leftForearm = new THREE.Mesh(leftForearmGeo, modelMat);
-      leftForearm.position.set(0.18, -0.42, 0.16);
-      leftForearm.rotation.z = 0.75;
-      leftForearm.rotation.x = -0.35;
-      leftArmGroup.add(leftForearm);
+      const rightShoulderMesh = new THREE.Mesh(shoulderGeo, modelMat);
+      rightShoulderMesh.position.set(-0.36, 1.42, 0);
+      modelGroup.add(rightShoulderMesh);
 
-      const braceletGeo = new THREE.TorusGeometry(0.055, 0.012, 12, 24);
-      const bracelet = new THREE.Mesh(braceletGeo, chokerMat);
-      bracelet.position.set(0.10, -0.46, 0.18);
-      leftArmGroup.add(bracelet);
+      // ЛЕВАЯ РУКА: Непрерывная грациозная дуга с кистью на талии (Haute Couture Runway Pose)
+      const leftArmPoints = [
+        new THREE.Vector3(0.36, 1.42, 0.0),    // Плечо
+        new THREE.Vector3(0.47, 1.28, 0.04),   // Бицепс
+        new THREE.Vector3(0.53, 1.10, 0.09),   // Локоть (плавный изгиб)
+        new THREE.Vector3(0.47, 0.99, 0.16),   // Предплечье
+        new THREE.Vector3(0.34, 0.96, 0.20),   // Запястье
+        new THREE.Vector3(0.24, 0.95, 0.17),   // Ладонь на талии
+        new THREE.Vector3(0.18, 0.94, 0.14)    // Пальцы, аккуратно лежащие на поясе
+      ];
+      const leftArmCurve = new THREE.CatmullRomCurve3(leftArmPoints);
+      leftArmCurve.curveType = 'centripetal';
+      const leftArmGeo = new THREE.TubeGeometry(leftArmCurve, 48, 0.045, 18, false);
+      const leftArmMesh = new THREE.Mesh(leftArmGeo, modelMat);
+      modelGroup.add(leftArmMesh);
 
-      modelGroup.add(leftArmGroup);
+      // Золотой браслет на левом запястье (плотно облегает руку)
+      const leftBraceletGeo = new THREE.TorusGeometry(0.052, 0.012, 16, 28);
+      const leftBracelet = new THREE.Mesh(leftBraceletGeo, goldMat);
+      leftBracelet.position.set(0.28, 0.955, 0.19);
+      leftBracelet.rotation.y = Math.PI / 4;
+      modelGroup.add(leftBracelet);
 
-      const rightArmGroup = new THREE.Group();
-      rightArmGroup.position.set(-0.36, 1.40, 0);
+      // ПРАВАЯ РУКА: Свободно струящаяся подиумная рука вдоль бедра в шаге
+      const rightArmPoints = [
+        new THREE.Vector3(-0.36, 1.42, 0.0),    // Плечо
+        new THREE.Vector3(-0.44, 1.25, -0.03),  // Бицепс
+        new THREE.Vector3(-0.46, 1.02, -0.06),  // Локоть
+        new THREE.Vector3(-0.42, 0.75, -0.06),  // Предплечье
+        new THREE.Vector3(-0.36, 0.48, -0.04),  // Запястье
+        new THREE.Vector3(-0.32, 0.28, -0.02),  // Ладонь
+        new THREE.Vector3(-0.29, 0.12, 0.00)    // Кончики пальцев в свободном полете
+      ];
+      const rightArmCurve = new THREE.CatmullRomCurve3(rightArmPoints);
+      rightArmCurve.curveType = 'centripetal';
+      const rightArmGeo = new THREE.TubeGeometry(rightArmCurve, 48, 0.045, 18, false);
+      const rightArmMesh = new THREE.Mesh(rightArmGeo, modelMat);
+      modelGroup.add(rightArmMesh);
 
-      const rightUpperArmGeo = new THREE.CylinderGeometry(0.06, 0.05, 0.54, 18);
-      const rightUpperArm = new THREE.Mesh(rightUpperArmGeo, modelMat);
-      rightUpperArm.position.set(-0.06, -0.24, -0.04);
-      rightUpperArm.rotation.z = 0.22;
-      rightUpperArm.rotation.x = -0.15;
-      rightArmGroup.add(rightUpperArm);
+      // Золотой браслет на правом предплечье
+      const rightBraceletGeo = new THREE.TorusGeometry(0.052, 0.012, 16, 28);
+      const rightBracelet = new THREE.Mesh(rightBraceletGeo, goldMat);
+      rightBracelet.position.set(-0.40, 0.65, -0.05);
+      rightBracelet.rotation.x = Math.PI / 8;
+      modelGroup.add(rightBracelet);
 
-      const rightForearmGeo = new THREE.CylinderGeometry(0.05, 0.04, 0.50, 18);
-      const rightForearm = new THREE.Mesh(rightForearmGeo, modelMat);
-      rightForearm.position.set(-0.11, -0.66, -0.06);
-      rightForearm.rotation.z = 0.10;
-      rightArmGroup.add(rightForearm);
+      // 4. ДЛИННЫЕ СТРОЙНЫЕ НОГИ (НЕПРЕРЫВНЫЕ СПЛАЙНЫ)
+      // Правая нога (опорная, прямая)
+      const rightLegPoints = [
+        new THREE.Vector3(-0.14, 0.35, 0.0),
+        new THREE.Vector3(-0.14, -0.15, 0.01),
+        new THREE.Vector3(-0.13, -0.65, 0.0),
+        new THREE.Vector3(-0.12, -1.15, 0.0),
+        new THREE.Vector3(-0.11, -1.65, 0.02)
+      ];
+      const rightLegCurve = new THREE.CatmullRomCurve3(rightLegPoints);
+      const rightLegGeo = new THREE.TubeGeometry(rightLegCurve, 36, 0.075, 18, false);
+      const rightLegMesh = new THREE.Mesh(rightLegGeo, modelMat);
+      modelGroup.add(rightLegMesh);
 
-      modelGroup.add(rightArmGroup);
-
-      // 4. СТРОЙНЫЕ ДЛИННЫЕ НОГИ
-      const rightLegGroup = new THREE.Group();
-      rightLegGroup.position.set(-0.13, 0.35, 0);
-
-      const rightThighGeo = new THREE.CylinderGeometry(0.135, 0.09, 0.90, 18);
-      const rightThigh = new THREE.Mesh(rightThighGeo, modelMat);
-      rightThigh.position.y = -0.42;
-      rightLegGroup.add(rightThigh);
-
-      const rightShinGeo = new THREE.CylinderGeometry(0.085, 0.055, 0.95, 18);
-      const rightShin = new THREE.Mesh(rightShinGeo, modelMat);
-      rightShin.position.y = -1.28;
-      rightLegGroup.add(rightShin);
-
-      const rightShoeGeo = new THREE.ConeGeometry(0.08, 0.22, 16);
-      rightShoeGeo.scale(0.8, 1.0, 1.6);
-      const rightShoe = new THREE.Mesh(rightShoeGeo, chokerMat);
+      // Туфля на шпильке (правая)
+      const shoeGeo = new THREE.ConeGeometry(0.075, 0.22, 18);
+      shoeGeo.scale(0.8, 1.0, 1.5);
+      const rightShoe = new THREE.Mesh(shoeGeo, goldMat);
       rightShoe.rotation.x = Math.PI / 2.2;
-      rightShoe.position.set(0, -1.78, 0.08);
-      rightLegGroup.add(rightShoe);
+      rightShoe.position.set(-0.11, -1.78, 0.08);
+      modelGroup.add(rightShoe);
 
-      const heelGeo = new THREE.CylinderGeometry(0.015, 0.01, 0.26, 12);
-      const rightHeel = new THREE.Mesh(heelGeo, chokerMat);
-      rightHeel.position.set(0, -1.80, -0.04);
-      rightLegGroup.add(rightHeel);
+      const heelGeo = new THREE.CylinderGeometry(0.012, 0.008, 0.25, 12);
+      const rightHeel = new THREE.Mesh(heelGeo, goldMat);
+      rightHeel.position.set(-0.11, -1.80, -0.03);
+      modelGroup.add(rightHeel);
 
-      modelGroup.add(rightLegGroup);
+      // Левая нога (подиумный шаг, слегка выдвинута вперед)
+      const leftLegPoints = [
+        new THREE.Vector3(0.14, 0.35, 0.0),
+        new THREE.Vector3(0.14, -0.15, 0.09),
+        new THREE.Vector3(0.13, -0.65, 0.18),
+        new THREE.Vector3(0.12, -1.15, 0.26),
+        new THREE.Vector3(0.11, -1.64, 0.32)
+      ];
+      const leftLegCurve = new THREE.CatmullRomCurve3(leftLegPoints);
+      const leftLegGeo = new THREE.TubeGeometry(leftLegCurve, 36, 0.075, 18, false);
+      const leftLegMesh = new THREE.Mesh(leftLegGeo, modelMat);
+      modelGroup.add(leftLegMesh);
 
-      const leftLegGroup = new THREE.Group();
-      leftLegGroup.position.set(0.13, 0.35, 0);
-
-      const leftThighGeo = new THREE.CylinderGeometry(0.135, 0.09, 0.90, 18);
-      const leftThigh = new THREE.Mesh(leftThighGeo, modelMat);
-      leftThigh.position.set(0.02, -0.42, 0.10);
-      leftThigh.rotation.x = -0.22;
-      leftLegGroup.add(leftThigh);
-
-      const leftShinGeo = new THREE.CylinderGeometry(0.085, 0.055, 0.95, 18);
-      const leftShin = new THREE.Mesh(leftShinGeo, modelMat);
-      leftShin.position.set(0.02, -1.26, 0.25);
-      leftShin.rotation.x = -0.08;
-      leftLegGroup.add(leftShin);
-
-      const leftShoe = new THREE.Mesh(rightShoeGeo, chokerMat);
+      const leftShoe = new THREE.Mesh(shoeGeo, goldMat);
       leftShoe.rotation.x = Math.PI / 2.1;
-      leftShoe.position.set(0.02, -1.77, 0.34);
-      leftLegGroup.add(leftShoe);
+      leftShoe.position.set(0.11, -1.77, 0.40);
+      modelGroup.add(leftShoe);
 
-      const leftHeel = new THREE.Mesh(heelGeo, chokerMat);
-      leftHeel.position.set(0.02, -1.79, 0.22);
-      leftLegGroup.add(leftHeel);
-
-      modelGroup.add(leftLegGroup);
+      const leftHeel = new THREE.Mesh(heelGeo, goldMat);
+      leftHeel.position.set(0.11, -1.79, 0.28);
+      modelGroup.add(leftHeel);
 
       mainGroup.add(modelGroup);
     } catch (e) {
@@ -458,7 +506,7 @@
       ];
 
       const ribbonCurve = new THREE.CatmullRomCurve3(splinePoints);
-      const tubeGeo = new THREE.TubeGeometry(ribbonCurve, 80, 0.038, 12, false);
+      const tubeGeo = new THREE.TubeGeometry(ribbonCurve, 80, 0.034, 12, false);
       const ribbonMat = new THREE.MeshPhysicalMaterial({
         color: theme.accent,
         emissive: theme.accent,
@@ -466,7 +514,7 @@
         roughness: 0.25,
         metalness: 0.65,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.82,
         clearcoat: 1.0
       });
       mainGroup.ribbonMat = ribbonMat;
@@ -481,43 +529,45 @@
   // ==========================================
   // ПАРЯЩИЕ КАРТОЧКИ ЛУКБУКА (LOOKBOOK CARDS)
   // ==========================================
-  function createLookbookCards(theme) {
+  function createLookbookCards(theme, isMobile) {
     try {
       const cardData = [
-        { text: '💎 VIP 4K', sub: 'EXCLUSIVE', angle: 0, height: 1.1, radius: 1.85 },
-        { text: '✨ GLOCK MODELS', sub: 'AGENCY 2026', angle: Math.PI * 0.55, height: 0.3, radius: 1.95 },
-        { text: '🔞 1000+ MEDIA', sub: 'DAILY ARCHIVE', angle: Math.PI * 1.1, height: 1.4, radius: 1.9 },
-        { text: '🦋 PRIVATE ACCESS', sub: 'VERIFIED', angle: Math.PI * 1.65, height: -0.4, radius: 1.8 }
+        { text: '💎 VIP 4K', sub: 'EXCLUSIVE', angle: 0, height: 1.1, radius: isMobile ? 1.45 : 1.85 },
+        { text: '✨ GLOCK MODELS', sub: 'AGENCY 2026', angle: Math.PI * 0.55, height: 0.3, radius: isMobile ? 1.5 : 1.95 },
+        { text: '🔞 1000+ MEDIA', sub: 'DAILY ARCHIVE', angle: Math.PI * 1.1, height: 1.4, radius: isMobile ? 1.45 : 1.9 },
+        { text: '🦋 PRIVATE ACCESS', sub: 'VERIFIED', angle: Math.PI * 1.65, height: -0.4, radius: isMobile ? 1.4 : 1.8 }
       ];
 
       cardData.forEach((item) => {
         const canvas = document.createElement('canvas');
-        canvas.width = 380;
-        canvas.height = 140;
+        canvas.width = 360;
+        canvas.height = 130;
         const ctx = canvas.getContext('2d');
 
-        const grad = ctx.createLinearGradient(0, 0, 380, 140);
+        const grad = ctx.createLinearGradient(0, 0, 360, 130);
         grad.addColorStop(0, 'rgba(25, 18, 30, 0.90)');
         grad.addColorStop(1, 'rgba(12, 10, 18, 0.95)');
         ctx.fillStyle = grad;
 
-        drawRoundRect(ctx, 4, 4, 372, 132, 16);
+        drawRoundRect(ctx, 4, 4, 352, 122, 16);
         ctx.fill();
 
         ctx.strokeStyle = '#f472b6';
         ctx.lineWidth = 4;
         ctx.stroke();
 
-        ctx.font = 'bold 30px sans-serif';
+        ctx.font = 'bold 28px sans-serif';
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(item.text, 24, 58);
+        ctx.fillText(item.text, 22, 54);
 
-        ctx.font = '600 16px sans-serif';
+        ctx.font = '600 15px sans-serif';
         ctx.fillStyle = '#f472b6';
-        ctx.fillText(item.sub, 26, 98);
+        ctx.fillText(item.sub, 24, 94);
 
         const texture = new THREE.CanvasTexture(canvas);
-        const cardGeo = new THREE.PlaneGeometry(0.85, 0.32);
+        const cardWidth = isMobile ? 0.70 : 0.85;
+        const cardHeight = isMobile ? 0.26 : 0.32;
+        const cardGeo = new THREE.PlaneGeometry(cardWidth, cardHeight);
         const cardMat = new THREE.MeshBasicMaterial({
           map: texture,
           transparent: true,
@@ -540,13 +590,13 @@
   // ==========================================
   function createGlitterDust(theme) {
     try {
-      const particleCount = 120;
+      const particleCount = 110;
       const geom = new THREE.BufferGeometry();
       const positions = new Float32Array(particleCount * 3);
 
       for (let i = 0; i < particleCount; i++) {
         const theta = Math.random() * Math.PI * 2;
-        const radius = 0.8 + Math.random() * 2.8;
+        const radius = 0.8 + Math.random() * 2.6;
         positions[i * 3] = Math.cos(theta) * radius;
         positions[i * 3 + 1] = (Math.random() - 0.5) * 4.6;
         positions[i * 3 + 2] = Math.sin(theta) * radius;
@@ -589,7 +639,7 @@
 
     if (modelGroup) {
       modelGroup.position.y = -0.15 + Math.sin(elapsedTime * 1.2) * 0.025;
-      modelGroup.rotation.z = Math.sin(elapsedTime * 0.6) * 0.02;
+      modelGroup.rotation.z = Math.sin(elapsedTime * 0.6) * 0.018;
     }
 
     if (ribbonMesh) {
@@ -654,23 +704,27 @@
   function onWindowResize() {
     const width = window.innerWidth;
     const height = window.innerHeight;
+    const isMobile = width < 768;
+
     if (camera) {
       camera.aspect = width / height;
+      camera.position.z = isMobile ? 7.6 : (width < 1024 ? 6.4 : 5.6);
+      camera.position.y = isMobile ? 0.05 : 0.25;
       camera.updateProjectionMatrix();
     }
     if (renderer) {
       renderer.setSize(width, height);
     }
-    if (mainGroup) {
-      mainGroup.position.x = width >= 1100 ? 1.6 : (width >= 850 ? 1.2 : 0);
-    }
+    applyResponsiveLayout(width);
   }
 
   function onScroll() {
     const scrollY = window.pageYOffset || document.documentElement.scrollTop;
     if (mainGroup) {
+      const isMobile = window.innerWidth < 768;
+      const baseScale = isMobile ? 0.74 : (window.innerWidth < 1200 ? 0.9 : 1.0);
       const scrollProgress = Math.min(scrollY / 700, 1);
-      mainGroup.scale.setScalar(1.0 - scrollProgress * 0.22);
+      mainGroup.scale.setScalar(baseScale * (1.0 - scrollProgress * 0.22));
       mainGroup.position.z = -scrollProgress * 1.5;
     }
   }

@@ -2843,3 +2843,77 @@ html, body {
   margin-top: 8px !important;
   line-height: 1.35 !important;
 }
+
+
+/* ================= MOBILE ADAPTIVE REFINEMENTS ================= */
+@media (max-width: 768px) {
+  .main-container {
+    padding: 12px 14px 50px 14px !important;
+  }
+  .hero-banner {
+    max-width: 100% !important;
+    padding: 22px 18px !important;
+    margin-bottom: 24px !important;
+    background: rgba(14, 18, 28, 0.65) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+  }
+  .hero-title {
+    font-size: clamp(20px, 6vw, 26px) !important;
+    line-height: 1.25 !important;
+  }
+  .hero-subtitle {
+    font-size: 13.5px !important;
+    margin-bottom: 16px !important;
+    line-height: 1.5 !important;
+  }
+  .hero-stats {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 8px !important;
+    text-align: center;
+  }
+  .stat-item {
+    padding: 8px 4px !important;
+  }
+  .stat-val {
+    font-size: 17px !important;
+  }
+  .stat-lbl {
+    font-size: 10px !important;
+  }
+  .model-3d-hint {
+    font-size: 11px !important;
+    text-align: center;
+    line-height: 1.35;
+  }
+  .categories-scroller {
+    padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .products-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)) !important;
+    gap: 12px !important;
+  }
+  .prod-card {
+    padding: 10px !important;
+  }
+  .prod-title {
+    font-size: 13.5px !important;
+  }
+  .prod-price-box {
+    margin-bottom: 8px !important;
+  }
+  .prod-price {
+    font-size: 16px !important;
+  }
+  .story-card {
+    padding: 18px 16px !important;
+  }
+  .story-title {
+    font-size: 18px !important;
+  }
+  .story-desc {
+    font-size: 13px !important;
+  }
+}
