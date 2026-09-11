@@ -2421,6 +2421,7 @@ body {
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
+  transition: opacity 0.22s ease-out;
 }
 
 #webglContainer canvas {
@@ -2915,5 +2916,88 @@ html, body {
   }
   .story-desc {
     font-size: 13px !important;
+  }
+}
+
+
+/* ================= DEDICATED 3D STAGE & HORIZONTAL STORY CAROUSEL ================= */
+.mobile-3d-stage {
+  display: none;
+}
+
+/* Ограждение фона каталога: чистый непрозрачный темный фон без артефактов 3D */
+.categories-section,
+.catalog-section,
+.products-section {
+  position: relative;
+  z-index: 10;
+  background: #0a0c10;
+}
+
+@media (max-width: 768px) {
+  /* Выделенная 3D витрина сверху страницы для смартфонов */
+  .mobile-3d-stage {
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+    height: 310px;
+    margin: 4px 0 16px 0;
+    pointer-events: none;
+    position: relative;
+    z-index: 5;
+  }
+  .mobile-3d-badge {
+    background: rgba(244, 114, 182, 0.16);
+    color: #f472b6;
+    border: 1px solid rgba(244, 114, 182, 0.35);
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    margin-bottom: 6px;
+    backdrop-filter: blur(8px);
+  }
+  .mobile-3d-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+
+  /* Горизонтальная плавная карусель для 3 карточек истории вместо трех экранов прокрутки */
+  .story-section {
+    display: flex !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    scroll-snap-type: x mandatory !important;
+    -webkit-overflow-scrolling: touch !important;
+    gap: 12px !important;
+    margin: 16px -14px 28px -14px !important;
+    padding: 4px 14px 14px 14px !important;
+    scrollbar-width: none !important;
+  }
+  .story-section::-webkit-scrollbar {
+    display: none !important;
+  }
+  .story-card {
+    flex: 0 0 85% !important;
+    min-width: 85% !important;
+    scroll-snap-align: center !important;
+    padding: 16px 18px !important;
+    margin: 0 !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+  }
+  .story-step-badge {
+    font-size: 10px !important;
+    margin-bottom: 6px !important;
+  }
+  .story-title {
+    font-size: 16px !important;
+    margin-bottom: 6px !important;
+  }
+  .story-desc {
+    font-size: 12.5px !important;
+    line-height: 1.5 !important;
   }
 }

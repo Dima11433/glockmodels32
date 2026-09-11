@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="web/css/style.css">
+  <link rel="stylesheet" href="web/css/style.css?v=3.1">
   
   <!-- Three.js + GSAP CDN для 3D Core -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -116,6 +116,12 @@
 
   <!-- ОСНОВНОЙ КОНТЕНТ -->
   <main class="main-container">
+
+    <!-- Выделенная 3D-сцена для смартфонов (На телефонах отображается сверху без наложений) -->
+    <div class="mobile-3d-stage" id="mobile3dStage">
+      <div class="mobile-3d-badge">👠 HAUTE COUTURE 3D RUNWAY</div>
+      <div class="mobile-3d-hint">✥ Свайпайте влево/вправо для вращения 360°</div>
+    </div>
     
     <!-- Hero промо-баннер -->
     <section class="hero-banner" id="core">
@@ -755,7 +761,7 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Скрипты 3D сцены и приложения -->
-  <script src="web/js/three-scene.js"></script>
-  <script src="web/js/app.js"></script>
+  <script src="web/js/three-scene.js?v=3.1"></script>
+  <script src="web/js/app.js?v=3.1"></script>
 </body>
 </html>
