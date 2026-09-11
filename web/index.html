@@ -2,26 +2,82 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GLOCK SHOP — Официальный магазин моделей</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>GLOCK MODELS — Официальный магазин моделей</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="web/css/style.css">
+  
+  <!-- Three.js + GSAP CDN для 3D Core -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
   <!-- QRCode.js для генерации QR кодов Tonkeeper -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 <body>
 
+  <!-- 3D Three.js Контейнер для Glock Models (Diamond Core & Agency Satellites) -->
+  <div id="webglContainer"></div>
+
+  <!-- Мобильное затемнение при открытом меню -->
+  <div class="mobile-drawer-overlay" id="mobileDrawerOverlay" onclick="closeMobileDrawer()"></div>
+
+  <!-- Мобильная шторка Cyber Drawer -->
+  <aside class="mobile-drawer" id="mobileDrawer">
+    <div class="mobile-drawer-header">
+      <div class="logo-area" onclick="location.reload()">
+        <span class="logo-icon">💎</span>
+        <div class="logo-text">
+          <span class="brand-title">GLOCK MODELS</span>
+          <span class="brand-subtitle">VIP MODELS AGENCY</span>
+        </div>
+      </div>
+      <button class="drawer-close-btn" onclick="closeMobileDrawer()">✕</button>
+    </div>
+
+    <nav class="mobile-nav-links">
+      <a href="#core" class="mobile-nav-link" onclick="closeMobileDrawer()">💎 3D Diamond Core</a>
+      <a href="#story" class="mobile-nav-link" onclick="closeMobileDrawer()">✨ О нас & Модели</a>
+      <a href="#catalog" class="mobile-nav-link" onclick="closeMobileDrawer()">📁 Каталог паков</a>
+      <a href="#cryptobot" class="mobile-nav-link" onclick="closeMobileDrawer()">⚡ Оплата CryptoBot</a>
+    </nav>
+
+    <div class="mobile-drawer-section">
+      <div class="mobile-drawer-label">3D Тема оформления:</div>
+      <div class="theme-switch-group">
+        <button class="theme-btn-chip active" data-theme="rosegold" onclick="setAgency3DTheme('rosegold')">🌸 Rose</button>
+        <button class="theme-btn-chip" data-theme="diamond" onclick="setAgency3DTheme('diamond')">❄️ Ice</button>
+        <button class="theme-btn-chip" data-theme="ruby" onclick="setAgency3DTheme('ruby')">🔥 Ruby</button>
+        <button class="theme-btn-chip" data-theme="emerald" onclick="setAgency3DTheme('emerald')">💎 VIP</button>
+      </div>
+    </div>
+
+    <div class="mobile-drawer-actions">
+      <button class="curr-btn w-100" id="mobileCurrBtn" onclick="toggleCurrency()" style="padding: 10px; border-radius: 8px; background: rgba(255,255,255,0.05); color: #fff; border: 1px solid var(--border-color); cursor: pointer;">Валюта: USD ($)</button>
+      <button class="btn btn-primary w-100" onclick="closeMobileDrawer(); openAuthModalOrProfile();">👤 Личный кабинет</button>
+      <button class="btn btn-admin-header w-100" id="mobileAdminBtn" style="display: none;" onclick="closeMobileDrawer(); openAdminModal();">🛡️ Админ-панель</button>
+    </div>
+  </aside>
+
   <!-- ВЕРХНЯЯ НАВИГАЦИОННАЯ ПАНЕЛЬ -->
   <header class="site-header">
     <div class="header-container">
       <div class="logo-area" onclick="location.reload()">
-        <span class="logo-icon">⚡</span>
+        <span class="logo-icon">💎</span>
         <div class="logo-text">
-          <span class="brand-title" id="shopTitle">GLOCK SHOP</span>
-          <span class="brand-subtitle">STORE & MODELS</span>
+          <span class="brand-title" id="shopTitle">GLOCK MODELS</span>
+          <span class="brand-subtitle">VIP MODELS & STORE</span>
         </div>
+      </div>
+
+      <!-- Десктопный выбор 3D тем -->
+      <div class="theme-switch-group desktop-only" style="display: flex; align-items: center; gap: 6px;">
+        <button class="theme-btn-chip active" data-theme="rosegold" onclick="setAgency3DTheme('rosegold')">🌸 Rose</button>
+        <button class="theme-btn-chip" data-theme="diamond" onclick="setAgency3DTheme('diamond')">❄️ Ice</button>
+        <button class="theme-btn-chip" data-theme="ruby" onclick="setAgency3DTheme('ruby')">🔥 Ruby</button>
+        <button class="theme-btn-chip" data-theme="emerald" onclick="setAgency3DTheme('emerald')">💎 VIP</button>
       </div>
 
       <!-- Поиск по каталогу -->
@@ -30,7 +86,7 @@
         <input type="text" id="searchInput" placeholder="Поиск товаров и моделей..." oninput="handleSearch()">
       </div>
 
-      <!-- Правая панель (Валюта + Профиль) -->
+      <!-- Правая панель (Валюта + Профиль + Меню) -->
       <div class="header-actions">
         <!-- Переключатель валюты -->
         <div class="currency-toggle" title="Сменить валюту">
@@ -46,9 +102,14 @@
         <!-- Кнопка входа или профиль пользователя -->
         <div id="authContainer">
           <button class="btn btn-primary btn-login" onclick="openLoginModal()">
-            <span class="tg-icon">✈️</span> Войти через Telegram
+            <span class="tg-icon">🔑</span> Войти
           </button>
         </div>
+
+        <!-- Гамбургер меню на мобильных -->
+        <button class="mobile-menu-btn" onclick="toggleMobileDrawer()" aria-label="Меню">
+          <span></span><span></span><span></span>
+        </button>
       </div>
     </div>
   </header>
@@ -57,16 +118,46 @@
   <main class="main-container">
     
     <!-- Hero промо-баннер -->
-    <section class="hero-banner">
+    <section class="hero-banner" id="core">
       <div class="hero-content">
-        <span class="hero-badge">🔥 ОФИЦИАЛЬНАЯ ПЛАТФОРМА</span>
-        <h1 class="hero-title">Магазин цифровых товаров и моделей</h1>
-        <p class="hero-subtitle">Мгновенная доставка товаров, единый баланс с Telegram-ботом и оплата через Tonkeeper & CryptoBot</p>
+        <span class="hero-badge">💎 VIP AGENCY &amp; EXCLUSIVE CONTENT</span>
+        <h1 class="hero-title">Закрытая База Моделей &amp; Цифровой Магазин</h1>
+        <p class="hero-subtitle">Мгновенный доступ к приватным архивам моделей, единый синхронизированный баланс с Telegram-ботом и оплата в пару кликов через CryptoBot &amp; Tonkeeper</p>
         <div class="hero-stats">
-          <div class="stat-item"><span class="stat-val" id="totalCatsCount">17</span><span class="stat-lbl">Категорий</span></div>
-          <div class="stat-item"><span class="stat-val" id="totalProdsCount">46</span><span class="stat-lbl">Товаров</span></div>
-          <div class="stat-item"><span class="stat-val">24/7</span><span class="stat-lbl">Доставка</span></div>
+          <div class="stat-item"><span class="stat-val" id="totalCatsCount">17</span><span class="stat-lbl">Разделов</span></div>
+          <div class="stat-item"><span class="stat-val" id="totalProdsCount">46</span><span class="stat-lbl">Паков</span></div>
+          <div class="stat-item"><span class="stat-val">24/7</span><span class="stat-lbl">Автовыдача</span></div>
         </div>
+        <div class="model-3d-hint" style="margin-top: 16px; font-size: 12px; color: var(--text-muted); display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <span>✥ Вращайте 3D-бриллиант курсором или свайпом / скролльте для трансформации</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCROLL STORYTELLING СЕКЦИЯ (Синхронизирована с 3D Ядром) -->
+    <section class="story-section" id="story">
+      <div class="story-card" data-step="1">
+        <div class="story-step-badge">01 // ЭЛИТНЫЙ КАСТИНГ</div>
+        <h2 class="story-title">Закрытая База Моделей</h2>
+        <p class="story-desc">
+          Уникальные цифровые паки, верифицированные портфолио и эксклюзивные медиаматериалы топ-уровня. Все модели проверяются вручную перед публикацией в каталоге.
+        </p>
+      </div>
+
+      <div class="story-card" data-step="2">
+        <div class="story-step-badge">02 // ПРИВАТНЫЙ АРХИВ</div>
+        <h2 class="story-title">Моментальная Автовыдача</h2>
+        <p class="story-desc">
+          Мгновенный доступ к приватным облачным хранилищам Mega и Telegram сразу после оплаты. Полная конфиденциальность и отсутствие внешних следов.
+        </p>
+      </div>
+
+      <div class="story-card" data-step="3">
+        <div class="story-step-badge">03 // СИНХРОНИЗАЦИЯ С ТЕЛЕГРАМ</div>
+        <h2 class="story-title">Единый Баланс Бота и Сайта</h2>
+        <p class="story-desc">
+          Привяжите ваш Telegram через команду <code>/link</code> или раздел профиля. Ваш баланс, история заказов и скидки автоматически объединяются без потерь.
+        </p>
       </div>
     </section>
 
@@ -101,6 +192,27 @@
       </div>
     </section>
 
+    <!-- БАННЕР CRYPTOBOT & TONKEEPER -->
+    <section class="cryptobot-banner-section" id="cryptobot" style="margin: 40px 0 60px 0;">
+      <div class="cryptobot-banner-card" style="background: linear-gradient(135deg, rgba(20, 26, 40, 0.8), rgba(15, 23, 42, 0.95)); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: var(--radius-lg); padding: 36px; display: flex; align-items: center; justify-content: space-between; gap: 30px; flex-wrap: wrap;">
+        <div class="cb-content" style="max-width: 600px;">
+          <span class="badge badge-pack" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 700; margin-bottom: 12px; display: inline-block;">⚡ МОМЕНТАЛЬНОЕ ПОПОЛНЕНИЕ</span>
+          <h2 style="font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 10px;">Оплата через @CryptoBot в Telegram</h2>
+          <p style="font-size: 14px; color: var(--text-muted); line-height: 1.6; margin-bottom: 20px;">
+            Пополняйте баланс в USDT, TON, BTC или LTC без комиссий за 15 секунд. Автоматическое зачисление на баланс личного кабинета сразу после оплаты.
+          </p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+            <span class="pay-badge">💎 USDT (TRC20 / TON)</span>
+            <span class="pay-badge">⚡ TON</span>
+            <span class="pay-badge">₿ Bitcoin</span>
+          </div>
+          <button class="btn btn-primary btn-lg" onclick="openTopupModal()">
+            ⚡ Пополнить баланс через CryptoBot
+          </button>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- ПОДВАЛ -->
@@ -108,10 +220,10 @@
     <div class="footer-container">
       <div class="footer-col">
         <div class="logo-area">
-          <span class="logo-icon">⚡</span>
-          <span class="brand-title">GLOCK SHOP</span>
+          <span class="logo-icon">💎</span>
+          <span class="brand-title">GLOCK MODELS</span>
         </div>
-        <p class="footer-desc">Автономная веб-платформа с синхронизацией товаров и единым балансом с Telegram-ботом.</p>
+        <p class="footer-desc">Автономная веб-платформа моделей с синхронизацией товаров и единым балансом с Telegram-ботом.</p>
       </div>
       <div class="footer-col">
         <h4>Оплата</h4>
@@ -128,7 +240,7 @@
       </div>
     </div>
     <div class="footer-bottom">
-      <p>© 2026 GLOCK SHOP. Все права защищены. Работает автономно.</p>
+      <p>© 2026 GLOCK MODELS. Все права защищены. Работает автономно.</p>
     </div>
   </footer>
 
@@ -350,65 +462,86 @@
     </div>
   </div>
 
-  <!-- Модальное окно входа в аккаунт (OTP код в Telegram) -->
+  <!-- Модальное окно авторизации (Вход / Регистрация) БЕЗ EMAIL: только Логин и Пароль -->
   <div class="modal-overlay" id="loginModal" onclick="closeModalOnOverlay(event, 'loginModal')">
     <div class="modal-card modal-login">
       <button class="modal-close" onclick="closeModal('loginModal')">✕</button>
       <div class="login-header-icon">🔐</div>
-      <h3 class="modal-heading">Вход в аккаунт</h3>
-      <p class="modal-subheading">Единый баланс, скидки и история покупок с ботом</p>
-      
-      <!-- ШАГ 1: Ввод никнейма / ID -->
-      <div id="loginStepIdentifier">
-        <p class="login-step-hint">Введите ваш Telegram <b>@username</b> или ID — мы отправим 6-значный код подтверждения в чат с ботом:</p>
-        <div class="input-with-icon">
-          <span class="input-prefix">@</span>
-          <input type="text" id="loginIdentifier" placeholder="Ваш никнейм (например ggg468q) или ID" onkeydown="if(event.key==='Enter')handleSendCode()">
-        </div>
-        <button class="btn btn-primary btn-block mt-3 btn-lg" id="btnSendCode" onclick="handleSendCode()">
-          Получить код в Telegram 🚀
-        </button>
-        <p class="login-safe-hint">⚡ Код придёт прямо в Telegram, даже если бот сейчас отключён!</p>
+      <h3 class="modal-heading">Личный кабинет</h3>
+      <p class="modal-subheading">Единый баланс, скидки и моментальный доступ</p>
 
-        <div class="login-divider"><span>или альтернативный вход</span></div>
-
-        <button class="btn btn-outline btn-block" id="btnAuthViaBot" onclick="startBotAuthFlow()">
-          <span class="tg-paper-icon">✈️</span> Войти в 1 клик через бота
-        </button>
-        <div class="bot-auth-spinner" id="botAuthWaiting" style="display: none;">
-          <div class="spinner-small"></div>
-          <span id="botAuthStatusText">Ожидание в @glock_models_bot...</span>
-        </div>
-        <div class="api-status-row mt-3" style="font-size: 11px; color: var(--text-muted); text-align: center;">
-          <span id="apiConnectionStatus">🌐 Сервер: <a href="javascript:void(0)" onclick="promptChangeApiUrl()" style="color: var(--accent); text-decoration: underline;" id="apiHostLabel">подключение...</a></span>
-        </div>
+      <!-- Переключение вкладок Вход / Регистрация -->
+      <div class="auth-tabs-nav">
+        <button class="auth-tab-btn active" id="tabBtnLogin" onclick="switchAuthTab('login')">Вход</button>
+        <button class="auth-tab-btn" id="tabBtnRegister" onclick="switchAuthTab('register')">Регистрация</button>
       </div>
 
-      <!-- ШАГ 2: Ввод полученного 6-значного кода -->
-      <div id="loginStepCode" style="display: none;">
-        <div class="otp-target-card">
-          <span class="otp-target-icon">📩</span>
-          <div class="otp-target-text">
-            <span>Код отправлен пользователю</span>
-            <b id="otpTargetUsername">@ggg468q</b>
+      <!-- ВКЛАДКА 1: ВХОД -->
+      <div class="auth-pane active" id="authPaneLogin">
+        <div class="auth-input-group">
+          <label class="auth-input-label">Логин:</label>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">👤</span>
+            <input type="text" id="loginUsername" placeholder="Ваш логин (например alex)" onkeydown="if(event.key==='Enter')handleLogin()">
           </div>
         </div>
 
-        <p class="login-step-hint mt-2">Введите 6 цифр из сообщения в Telegram:</p>
-        
-        <div class="otp-input-wrap mt-2">
-          <input type="text" id="loginOtpCode" maxlength="6" inputmode="numeric" placeholder="••••••" oninput="if(this.value.length===6)handleVerifyCode()" onkeydown="if(event.key==='Enter')handleVerifyCode()">
+        <div class="auth-input-group">
+          <label class="auth-input-label">Пароль:</label>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">🔒</span>
+            <input type="password" id="loginPassword" placeholder="Ваш пароль" onkeydown="if(event.key==='Enter')handleLogin()">
+          </div>
         </div>
 
-        <button class="btn btn-primary btn-block mt-3 btn-lg" id="btnVerifyCode" onclick="handleVerifyCode()">
-          Подтвердить и войти 🔑
+        <button class="btn btn-primary btn-block btn-lg mt-2" id="btnLoginSubmit" onclick="handleLogin()">
+          Войти в аккаунт 🚀
         </button>
 
-        <div class="otp-actions-row mt-3">
-          <button class="btn-link" id="btnResendCode" onclick="handleResendCode()">Отправить повторно</button>
-          <span class="otp-sep">•</span>
-          <button class="btn-link" onclick="backToIdentifierStep()">Сменить никнейм</button>
+        <div class="login-divider" style="margin: 16px 0; display: flex; align-items: center; text-align: center; color: var(--text-dim); font-size: 11px;">
+          <span style="flex: 1; border-bottom: 1px solid var(--border-color);"></span>
+          <span style="padding: 0 10px;">или быстрый доступ</span>
+          <span style="flex: 1; border-bottom: 1px solid var(--border-color);"></span>
         </div>
+
+        <button class="btn btn-outline btn-block" onclick="loginDemoAdmin()" style="display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <span>🛡️</span> Войти как @ggg468q (Администратор)
+        </button>
+
+        <p class="auth-safe-note">⚡ Сессия сохраняется на 365 дней и никогда не слетает при перезагрузке страницы.</p>
+      </div>
+
+      <!-- ВКЛАДКА 2: РЕГИСТРАЦИЯ (БЕЗ EMAIL) -->
+      <div class="auth-pane" id="authPaneRegister">
+        <div class="auth-input-group">
+          <label class="auth-input-label">Придумайте логин:</label>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">👤</span>
+            <input type="text" id="regLogin" placeholder="Логин (от 3 символов)" onkeydown="if(event.key==='Enter')document.getElementById('regPassword').focus()">
+          </div>
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-input-label">Придумайте пароль:</label>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">🔒</span>
+            <input type="password" id="regPassword" placeholder="Минимум 4 символа" onkeydown="if(event.key==='Enter')document.getElementById('regPasswordConfirm').focus()">
+          </div>
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-input-label">Повторите пароль:</label>
+          <div class="auth-input-wrap">
+            <span class="auth-input-icon">🔑</span>
+            <input type="password" id="regPasswordConfirm" placeholder="Повторите пароль" onkeydown="if(event.key==='Enter')handleRegister()">
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-block btn-lg mt-2" id="btnRegisterSubmit" onclick="handleRegister()">
+          Зарегистрироваться ✨
+        </button>
+
+        <p class="auth-safe-note">💡 Без Email и спама. Только логин и пароль. В Telegram-боте вы сможете привязать этот аккаунт через команду <code>/link</code>.</p>
       </div>
 
     </div>
@@ -621,6 +754,8 @@
   <!-- Всплывающие уведомления (Toasts) -->
   <div class="toast-container" id="toastContainer"></div>
 
+  <!-- Скрипты 3D сцены и приложения -->
+  <script src="web/js/three-scene.js"></script>
   <script src="web/js/app.js"></script>
 </body>
 </html>

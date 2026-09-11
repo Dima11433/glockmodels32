@@ -24,6 +24,11 @@ class SearchState(StatesGroup):
     query = State()
 
 
+class LinkSiteStates(StatesGroup):
+    waiting_for_login = State()
+    waiting_for_password = State()
+
+
 def menu_only_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[keyboards.menu_row()])
 
@@ -461,16 +466,20 @@ async def profile(cb: CallbackQuery, db: Database, state: FSMContext):
         reg_formatted = "30.10.2025"
 
     username_str = f"@{user['username']}" if user and user['username'] else f"id{cb.from_user.id}"
+    site_login = user["login"] if user and "login" in dict(user) and user["login"] else None
 
     # Синхронизация контейнеров
     await db.sync_user_containers(cb.from_user.id)
     container_info = await db.get_container_info(cb.from_user.id)
+
+    site_status = f"🌐 <b>{site_login}</b> (синхронизирован)" if site_login else "<i>не привязан</i>"
 
     text = (
         f"🌀 <b>Профиль</b>\n\n"
         f"🔘 <b>Аккаунт</b>\n"
         f"├ Никнейм: {username_str}\n"
         f"├ ID: <code>{cb.from_user.id}</code>\n"
+        f"├ Сайт: {site_status}\n"
         f"└ Регистрация: {reg_formatted}\n\n"
         f"📉 <b>Статистика</b>\n"
         f"├ Всего заказов: {stats['total_orders']}\n"
@@ -484,7 +493,11 @@ async def profile(cb: CallbackQuery, db: Database, state: FSMContext):
         f"📦 Контейнеры: {container_info['available']} доступно | {container_info['opened']} открыто"
     )
 
+    link_btn_text = f"🌐 Аккаунт сайта: {site_login}" if site_login else "🔗 Привязать аккаунт сайта"
+    link_cb_data = "profile:site_linked_info" if site_login else "profile:link_site"
+
     buttons = [
+        [InlineKeyboardButton(text=link_btn_text, callback_data=link_cb_data)],
         [InlineKeyboardButton(text="💲 Личная скидка", callback_data="profile:discount")],
         [InlineKeyboardButton(text="➕ Пополнить баланс", callback_data="topup")],
         [InlineKeyboardButton(text=f"💱 Валюта: {currency}", callback_data="profile:currency")],
@@ -498,6 +511,164 @@ async def profile(cb: CallbackQuery, db: Database, state: FSMContext):
     
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await send_tab(cb.message, db, "video:tab:profile", text, markup, banner_suffix="profile")
+    await cb.answer()
+
+
+# ─── ПРИВЯЗКА АККАУНТА САЙТА С ЕДИНЫМ БАЛАНСОМ ───
+
+@router.message(F.text == "/link")
+@router.callback_query(F.data == "profile:link_site")
+async def start_link_site(event: Message | CallbackQuery, state: FSMContext, db: Database):
+    await state.clear()
+    user_id = event.from_user.id
+    user = await db.get_user(user_id)
+    if user and "login" in dict(user) and user["login"]:
+        text = (
+            f"✅ <b>Ваш Telegram уже привязан к сайту!</b>\n\n"
+            f"👤 Логин на сайте: <b>{user['login']}</b>\n"
+            f"💎 Единый баланс: <b>${user['balance'] / 100:.2f}</b>\n\n"
+            "Все пополнения, заказы и баланс синхронизированы в реальном времени."
+        )
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Назад в профиль", callback_data="menu:profile")]
+        ])
+        if isinstance(event, CallbackQuery):
+            await event.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+            await event.answer()
+        else:
+            await event.answer(text, reply_markup=markup, parse_mode="HTML")
+        return
+
+    await state.set_state(LinkSiteStates.waiting_for_login)
+    text = (
+        "🔗 <b>Привязка аккаунта сайта GLOCK SHOP</b>\n\n"
+        "Введите ваш <b>логин</b> на сайте, который вы указали при регистрации:"
+    )
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="link_site:cancel")]
+    ])
+    if isinstance(event, CallbackQuery):
+        await event.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+        await event.answer()
+    else:
+        await event.answer(text, reply_markup=markup, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "link_site:cancel")
+async def cancel_link_site(cb: CallbackQuery, state: FSMContext, db: Database):
+    await state.clear()
+    await cb.answer("Привязка отменена")
+    await profile(cb, db, state)
+
+
+@router.message(LinkSiteStates.waiting_for_login)
+async def link_site_login_input(message: Message, state: FSMContext, db: Database):
+    raw_login = message.text.strip().lstrip("@")
+    site_user = await db.get_user_by_login(raw_login)
+    if not site_user:
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="link_site:cancel")]
+        ])
+        await message.answer(
+            f"❌ Пользователь с логином <code>{raw_login}</code> не найден на сайте.\n\n"
+            "Убедитесь, что вы зарегистрировались на сайте, и введите логин повторно:",
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+        return
+
+    if site_user.get("telegram_id") and site_user["telegram_id"] != message.from_user.id:
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="link_site:cancel")]
+        ])
+        await message.answer(
+            "❌ Этот аккаунт на сайте уже привязан к другому пользователю Telegram!\n"
+            "Введите другой логин или отмените привязку:",
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+        return
+
+    await state.update_data(site_user_id=site_user["id"], site_login=site_user.get("login") or raw_login)
+    await state.set_state(LinkSiteStates.waiting_for_password)
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="link_site:cancel")]
+    ])
+    await message.answer(
+        f"🔑 Логин найден: <b>{raw_login}</b>\n\n"
+        "Теперь введите <b>пароль</b> от вашего аккаунта на сайте:\n"
+        "<i>(Сообщение с паролем сразу удаляется в целях безопасности)</i>",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+
+
+@router.message(LinkSiteStates.waiting_for_password)
+async def link_site_password_input(message: Message, state: FSMContext, db: Database):
+    password = message.text.strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    data = await state.get_data()
+    site_user_id = data.get("site_user_id")
+    site_login = data.get("site_login")
+
+    site_user = await db.get_user(site_user_id)
+    if not site_user:
+        await state.clear()
+        await message.answer("❌ Ошибка: аккаунт не найден. Попробуйте снова: /link")
+        return
+
+    if site_user.get("password_hash") and site_user.get("salt"):
+        import hashlib
+        calc_hash = hashlib.sha256((site_user["salt"] + password).encode("utf-8")).hexdigest()
+        if calc_hash != site_user["password_hash"]:
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="link_site:cancel")]
+            ])
+            await message.answer(
+                "❌ <b>Неверный пароль!</b>\n\n"
+                "Попробуйте ввести пароль ещё раз:",
+                reply_markup=markup,
+                parse_mode="HTML"
+            )
+            return
+
+    updated_user = await db.link_telegram_to_site_user(site_user["id"], message.from_user.id, message.from_user.username)
+    await state.clear()
+
+    balance_usd = f"${updated_user['balance'] / 100:.2f}"
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👤 Перейти в профиль", callback_data="menu:profile")]
+    ])
+    await message.answer(
+        "🎉 <b>Аккаунт успешно привязан!</b>\n\n"
+        f"🌐 Логин на сайте: <b>{site_login}</b>\n"
+        f"💎 Единый баланс: <b>{balance_usd}</b>\n\n"
+        "Все пополнения, товары и баланс теперь едины между сайтом и ботом!",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data == "profile:site_linked_info")
+async def profile_site_linked_info(cb: CallbackQuery, db: Database):
+    user = await db.get_user(cb.from_user.id)
+    site_login = user.get("login") if user else "—"
+    bal_usd = f"${user['balance'] / 100:.2f}" if user else "$0.00"
+    text = (
+        f"🌐 <b>Синхронизация с сайтом GLOCK SHOP</b>\n\n"
+        f"👤 Привязанный логин: <b>{site_login}</b>\n"
+        f"💎 Единый баланс: <b>{bal_usd}</b>\n"
+        f"🆔 Telegram ID: <code>{cb.from_user.id}</code>\n\n"
+        "Баланс и покупки мгновенно обновляются и в боте, и на сайте."
+    )
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад в профиль", callback_data="menu:profile")]
+    ])
+    await cb.message.edit_text(text, reply_markup=markup, parse_mode="HTML")
     await cb.answer()
 
 

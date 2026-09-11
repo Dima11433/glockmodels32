@@ -342,6 +342,38 @@ class Database:
         except Exception:
             pass
 
+        # Миграция: авторизация на сайте без Email (логин + пароль + telegram_id)
+        for col_def in [
+            "login TEXT",
+            "password_hash TEXT",
+            "salt TEXT",
+            "telegram_id INTEGER"
+        ]:
+            try:
+                await self.conn.execute(f"ALTER TABLE users ADD COLUMN {col_def}")
+                await self.conn.commit()
+            except Exception:
+                pass
+
+        try:
+            await self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS site_sessions ("
+                "token TEXT PRIMARY KEY, "
+                "user_id INTEGER NOT NULL, "
+                "username TEXT, "
+                "created_at REAL NOT NULL)"
+            )
+            await self.conn.commit()
+        except Exception:
+            pass
+
+        try:
+            await self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users(login) WHERE login IS NOT NULL")
+            await self.conn.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id) WHERE telegram_id IS NOT NULL")
+            await self.conn.commit()
+        except Exception:
+            pass
+
     async def close(self) -> None:
         if self.conn:
             await self.conn.close()
@@ -349,8 +381,63 @@ class Database:
     # --- пользователи ---
 
     async def get_user(self, user_id: int):
-        cur = await self.conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        cur = await self.conn.execute(
+            "SELECT * FROM users WHERE id = ? OR telegram_id = ? ORDER BY CASE WHEN telegram_id = ? THEN 0 ELSE 1 END LIMIT 1",
+            (user_id, user_id, user_id)
+        )
         return await cur.fetchone()
+
+    async def get_user_by_login(self, login: str):
+        if not login:
+            return None
+        clean = login.strip().lower().lstrip("@")
+        cur = await self.conn.execute(
+            "SELECT * FROM users WHERE LOWER(login) = ? OR (login IS NULL AND LOWER(username) = ?) LIMIT 1",
+            (clean, clean)
+        )
+        return await cur.fetchone()
+
+    async def create_site_user(self, login: str, password_hash: str, salt: str, referrer_id: int | None = None):
+        import random
+        clean_login = login.strip()
+        for _ in range(20):
+            new_id = random.randint(100000000, 999999999)
+            existing = await self.get_user(new_id)
+            if not existing:
+                break
+        else:
+            new_id = int(time.time())
+
+        await self.conn.execute(
+            "INSERT INTO users (id, username, login, password_hash, salt, balance, referrer_id, currency) VALUES (?, ?, ?, ?, ?, 0, ?, 'USD')",
+            (new_id, clean_login, clean_login, password_hash, salt, referrer_id),
+        )
+        await self.conn.commit()
+        return await self.get_user(new_id)
+
+    async def link_telegram_to_site_user(self, site_user_id: int, telegram_id: int, telegram_username: str | None = None):
+        """Привязывает Telegram аккаунт к пользователю сайта с объединением баланса."""
+        cur = await self.conn.execute("SELECT * FROM users WHERE id = ?", (telegram_id,))
+        bot_row = await cur.fetchone()
+        bot_balance = bot_row["balance"] if bot_row else 0
+
+        # Объединяем баланс
+        if bot_balance > 0:
+            await self.conn.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (bot_balance, site_user_id))
+
+        # Переносим историю заказов и счетов
+        if bot_row and site_user_id != telegram_id:
+            await self.conn.execute("UPDATE purchases SET user_id = ? WHERE user_id = ?", (site_user_id, telegram_id))
+            await self.conn.execute("UPDATE invoices SET user_id = ? WHERE user_id = ?", (site_user_id, telegram_id))
+            await self.conn.execute("UPDATE site_sessions SET user_id = ? WHERE user_id = ?", (site_user_id, telegram_id))
+            await self.conn.execute("DELETE FROM users WHERE id = ?", (telegram_id,))
+
+        await self.conn.execute(
+            "UPDATE users SET telegram_id = ? WHERE id = ?",
+            (telegram_id, site_user_id)
+        )
+        await self.conn.commit()
+        return await self.get_user(site_user_id)
 
     async def get_or_create_user(self, user_id: int, username: str | None, referrer_id: int | None = None):
         row = await self.get_user(user_id)
@@ -358,26 +445,25 @@ class Database:
             needs_commit = False
             # Обновляем username если изменился
             if username and row["username"] != username:
-                await self.conn.execute("UPDATE users SET username = ? WHERE id = ?", (username, user_id))
+                await self.conn.execute("UPDATE users SET username = ? WHERE id = ?", (username, row["id"]))
                 needs_commit = True
-            # ← ГЛАВНЫЙ ФИКС: если реферера нет, но он передан — сохраняем
-            # (middleware создаёт юзера без реферера, cmd_start передаёт его позже)
-            if referrer_id and not row["referrer_id"] and referrer_id != user_id:
+            # если реферера нет, но он передан — сохраняем
+            if referrer_id and not row["referrer_id"] and referrer_id != row["id"]:
                 ref_exists = await self.get_user(referrer_id)
                 if ref_exists:
                     await self.conn.execute(
-                        "UPDATE users SET referrer_id = ? WHERE id = ?", (referrer_id, user_id)
+                        "UPDATE users SET referrer_id = ? WHERE id = ?", (referrer_id, row["id"])
                     )
                     needs_commit = True
             if needs_commit:
                 await self.conn.commit()
-            return await self.get_user(user_id)
+            return await self.get_user(row["id"])
         if referrer_id == user_id or (referrer_id is not None and await self.get_user(referrer_id) is None):
             referrer_id = None
         # INSERT OR IGNORE — защита от параллельных запросов одного пользователя
         await self.conn.execute(
-            "INSERT OR IGNORE INTO users (id, username, referrer_id, currency) VALUES (?, ?, ?, ?)",
-            (user_id, username, referrer_id, 'USD'),
+            "INSERT OR IGNORE INTO users (id, username, telegram_id, referrer_id, currency) VALUES (?, ?, ?, ?, ?)",
+            (user_id, username, user_id, referrer_id, 'USD'),
         )
         await self.conn.commit()
         return await self.get_user(user_id)
