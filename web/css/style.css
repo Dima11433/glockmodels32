@@ -310,14 +310,17 @@ body {
 }
 
 .hero-banner {
-  background: radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.2) 0%, rgba(0, 242, 254, 0.08) 60%, rgba(18, 22, 32, 0.6) 100%), var(--bg-card);
-  border: 1px solid var(--border-color);
+  background: rgba(18, 22, 32, 0.45);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-lg);
   padding: 36px 40px;
   margin-bottom: 32px;
   position: relative;
   overflow: hidden;
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  max-width: 660px;
 }
 
 .hero-badge {
